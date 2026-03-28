@@ -2,8 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { exec } from "child_process";
 import { promisify } from "util";
+import * as path from "path";
 
 const execAsync = promisify(exec);
+
+// Path to venv yt-dlp
+const YT_DLP_PATH = path.join(process.cwd(), ".venv", "bin", "yt-dlp");
 
 const analyzeSchema = z.object({
   url: z.string().url().refine(
@@ -38,9 +42,9 @@ export async function POST(req: NextRequest) {
     const body = await req.json();
     const { url } = analyzeSchema.parse(body);
 
-    // Use yt-dlp to fetch video info
+    // Use venv yt-dlp to fetch video info
     const { stdout } = await execAsync(
-      `yt-dlp --dump-json --no-playlist "${url}"`,
+      `"${YT_DLP_PATH}" --dump-json --no-playlist "${url}"`,
       { timeout: 30000 }
     );
 

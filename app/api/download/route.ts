@@ -7,6 +7,27 @@ import * as fs from "fs";
 
 const execAsync = promisify(exec);
 
+// Path to venv yt-dlp
+const YT_DLP_PATH = path.join(process.cwd(), ".venv", "bin", "yt-dlp");
+const PIP_PATH = path.join(process.cwd(), ".venv", "bin", "pip");
+
+// Function to update yt-dlp via pip
+async function updateYtDlp(): Promise<void> {
+  try {
+    const { stdout, stderr } = await execAsync(`${PIP_PATH} install -U yt-dlp`, { timeout: 120000 });
+    if (stdout) console.log("yt-dlp pip update:", stdout.trim());
+    if (stderr) console.warn("yt-dlp pip update stderr:", stderr.trim());
+  } catch (error) {
+    console.error("Failed to update yt-dlp via pip:", error);
+  }
+}
+
+// Update yt-dlp on startup
+updateYtDlp();
+
+// Update yt-dlp periodically (every 6 hours)
+setInterval(updateYtDlp, 6 * 60 * 60 * 1000);
+
 const downloadSchema = z.object({
   url: z.string().url(),
   format: z.enum(["mp4", "mp3", "webm"]),
@@ -79,8 +100,8 @@ export async function POST(req: NextRequest) {
       url,
     ];
 
-    // Start download process
-    const ytDlpProcess = spawn("yt-dlp", args);
+    // Start download process using venv yt-dlp
+    const ytDlpProcess = spawn(YT_DLP_PATH, args);
     
     let fileName = "";
     let currentProgress = 0;

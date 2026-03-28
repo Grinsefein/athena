@@ -9,9 +9,9 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "Athena - YouTube Video Downloader",
-  description: "Fast, free, and powerful YouTube video downloader. Download videos in HD quality with multiple format options.",
-  keywords: ["youtube downloader", "video downloader", "mp3 converter", "youtube to mp4"],
+  title: "Athena - Video Downloader",
+  description: "Fast, free, and powerful video downloader. Download videos in HD quality with multiple format options.",
+  keywords: ["downloader", "video downloader", "mp3 converter", "video to mp4"],
 };
 
 export default function RootLayout({

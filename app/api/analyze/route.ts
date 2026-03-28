@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
+import { exec } from "child_process";
+import { promisify } from "util";
+
+const execAsync = promisify(exec);
 
 const analyzeSchema = z.object({
   url: z.string().url().refine(
@@ -8,38 +12,84 @@ const analyzeSchema = z.object({
   ),
 });
 
+interface YtDlpFormat {
+  format_id: string;
+  ext: string;
+  resolution?: string;
+  vcodec?: string;
+  acodec?: string;
+  quality?: number;
+  filesize?: number;
+  format_note?: string;
+}
+
+interface YtDlpInfo {
+  id: string;
+  title: string;
+  description: string;
+  thumbnail: string;
+  duration: number;
+  uploader: string;
+  formats: YtDlpFormat[];
+}
+
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
     const { url } = analyzeSchema.parse(body);
 
-    // Mock video info for demo - in production, this would use youtube-dl-exec
-    // const youtubedl = require('youtube-dl-exec');
-    // const info = await youtubedl(url, { dumpSingleJson: true });
-    
-    // Simulated response
-    const videoId = extractVideoId(url);
-    const mockInfo = {
-      id: videoId || "demo",
-      title: "Sample YouTube Video - Amazing Content!",
-      description: "This is a sample video description for demonstration purposes.",
-      thumbnail: videoId 
-        ? `https://i.ytimg.com/vi/${videoId}/maxresdefault.jpg`
-        : "https://i.ytimg.com/vi/dQw4w9WgXcQ/maxresdefault.jpg",
-      duration: "3:45",
-      author: "Awesome Channel",
-      formats: [
-        { format: "mp4", quality: "1080p", label: "1080p (Full HD)" },
-        { format: "mp4", quality: "720p", label: "720p (HD)" },
-        { format: "mp4", quality: "480p", label: "480p (SD)" },
-        { format: "mp4", quality: "360p", label: "360p (Low)" },
-        { format: "mp3", quality: "best", label: "MP3 Audio (Best)" },
-        { format: "mp3", quality: "128k", label: "MP3 Audio (128kbps)" },
-        { format: "webm", quality: "1080p", label: "WebM (1080p)" },
-      ],
-    };
+    // Use yt-dlp to fetch video info
+    const { stdout } = await execAsync(
+      `yt-dlp --dump-json --no-playlist "${url}"`,
+      { timeout: 30000 }
+    );
 
-    return NextResponse.json({ success: true, data: mockInfo });
+    const info: YtDlpInfo = JSON.parse(stdout);
+
+    // Format duration
+    const minutes = Math.floor(info.duration / 60);
+    const seconds = info.duration % 60;
+    const duration = `${minutes}:${seconds.toString().padStart(2, '0')}`;
+
+    // Extract available formats
+    const videoFormats = info.formats
+      .filter(f => f.vcodec !== 'none' && f.resolution && f.resolution !== 'audio only')
+      .map(f => ({
+        format: f.ext,
+        quality: f.format_note || f.resolution || 'unknown',
+        label: `${f.resolution || f.format_note} (${f.ext})`,
+      }));
+
+    const audioFormats = info.formats
+      .filter(f => f.acodec !== 'none' && f.vcodec === 'none')
+      .map(() => ({
+        format: 'mp3',
+        quality: 'best',
+        label: 'MP3 Audio (Best)',
+      }));
+
+    // Deduplicate and sort by quality
+    const uniqueVideoFormats = Array.from(
+      new Map(videoFormats.map(f => [f.label, f])).values()
+    ).slice(0, 4);
+
+    const formats = [
+      ...uniqueVideoFormats,
+      ...audioFormats.slice(0, 1),
+    ];
+
+    return NextResponse.json({
+      success: true,
+      data: {
+        id: info.id,
+        title: info.title,
+        description: info.description.slice(0, 200) + (info.description.length > 200 ? '...' : ''),
+        thumbnail: info.thumbnail,
+        duration,
+        author: info.uploader,
+        formats,
+      },
+    });
   } catch (error) {
     if (error instanceof z.ZodError) {
       return NextResponse.json(
@@ -47,9 +97,11 @@ export async function POST(req: NextRequest) {
         { status: 400 }
       );
     }
+
+    console.error('Analyze error:', error);
     
     return NextResponse.json(
-      { success: false, error: "Failed to analyze video" },
+      { success: false, error: "Failed to analyze video. Make sure the URL is valid and the video exists." },
       { status: 500 }
     );
   }

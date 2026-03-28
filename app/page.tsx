@@ -29,9 +29,9 @@ import {
   AlertCircle,
   RefreshCw,
   ExternalLink,
-  Sparkles,
-  Zap,
   Shield,
+  Hd,
+  Star,
 } from "lucide-react";
 
 const GithubIcon = ({ className }: { className?: string }) => (
@@ -69,6 +69,8 @@ interface DownloadState {
   progress: number;
   error?: string;
   downloadId?: string;
+  downloadUrl?: string;
+  fileName?: string;
 }
 
 const fadeInUp = {
@@ -164,16 +166,46 @@ export default function Home() {
         throw new Error(data.error || "Failed to start download");
       }
 
-      const progressInterval = setInterval(() => {
-        setDownloadState((prev) => {
-          if (prev.progress >= 100) {
-            clearInterval(progressInterval);
-            saveRecentDownload(videoInfo.title);
-            return { status: "completed", progress: 100, downloadId: data.data.downloadId };
+      const { downloadId } = data.data;
+
+      // Poll for real progress
+      const pollInterval = setInterval(async () => {
+        try {
+          const progressRes = await fetch(`/api/download?id=${downloadId}`);
+          const progressData = await progressRes.json();
+
+          if (!progressData.success) {
+            throw new Error(progressData.error);
           }
-          return { ...prev, progress: prev.progress + Math.random() * 15 };
-        });
-      }, 500);
+
+          const { progress, status, downloadUrl, fileName } = progressData.data;
+
+          setDownloadState((prev) => ({
+            ...prev,
+            progress,
+            status,
+            downloadUrl,
+            fileName,
+          }));
+
+          if (status === "completed") {
+            clearInterval(pollInterval);
+            saveRecentDownload(videoInfo.title);
+          } else if (status === "error") {
+            clearInterval(pollInterval);
+            setDownloadState((prev) => ({
+              ...prev,
+              status: "error",
+              error: "Download failed. Please try again.",
+            }));
+          }
+        } catch (err) {
+          console.error("Progress poll error:", err);
+        }
+      }, 1000);
+
+      // Cleanup interval after 5 minutes to prevent indefinite polling
+      setTimeout(() => clearInterval(pollInterval), 5 * 60 * 1000);
     } catch (error) {
       setDownloadState({
         status: "error",
@@ -196,7 +228,7 @@ export default function Home() {
   const features = [
     { icon: Video, title: "HD Quality", desc: "Download in 4K, 1080p, 720p" },
     { icon: Music, title: "Audio Only", desc: "Extract MP3 audio files" },
-    { icon: Zap, title: "Lightning Fast", desc: "High-speed parallel downloads" },
+    { icon: Download, title: "Fast Downloads", desc: "High-speed parallel downloads" },
     { icon: Shield, title: "Safe & Secure", desc: "No malware, no tracking" },
   ];
 
@@ -213,11 +245,11 @@ export default function Home() {
             animate={{ opacity: 1, x: 0 }}
             className="flex items-center gap-3"
           >
-            <div className="w-10 h-10 bg-gradient-to-br from-red-500 to-red-600 rounded-xl flex items-center justify-center shadow-lg shadow-red-500/25">
-              <YoutubeIcon className="w-6 h-6 text-white" />
+            <div className="w-10 h-10 bg-slate-900 dark:bg-slate-100 rounded-lg flex items-center justify-center">
+              <YoutubeIcon className="w-6 h-6 text-white dark:text-slate-900" />
             </div>
             <div className="flex flex-col">
-              <span className="text-xl font-bold bg-gradient-to-r from-red-600 to-orange-500 bg-clip-text text-transparent">
+              <span className="text-xl font-semibold text-foreground">
                 Athena
               </span>
               <span className="text-[10px] text-muted-foreground -mt-1">YouTube Downloader</span>
@@ -246,13 +278,9 @@ export default function Home() {
           >
             <ThemeToggle />
             <Button variant="ghost" size="icon" className="w-9 h-9">
-              <a href="https://github.com" target="_blank" rel="noopener noreferrer">
+              <a href="https://github.com/Grinsefein/athena" target="_blank" rel="noopener noreferrer">
                 <GithubIcon className="w-4 h-4" />
               </a>
-            </Button>
-            <Button size="sm" className="hidden sm:flex bg-red-600 hover:bg-red-700 text-white">
-              <Sparkles className="w-4 h-4 mr-1.5" />
-              Premium
             </Button>
           </motion.div>
         </div>
@@ -265,33 +293,18 @@ export default function Home() {
           animate="animate"
           className="text-center max-w-3xl mx-auto mb-8"
         >
-          <motion.div variants={fadeInUp}>
-            <Badge
-              variant="secondary"
-              className="mb-4 px-4 py-1.5 text-sm font-medium bg-red-50 text-red-600 dark:bg-red-950/30 dark:text-red-400 border-red-200 dark:border-red-800"
-            >
-              <Sparkles className="w-3.5 h-3.5 mr-1.5" />
-              Free & Unlimited Downloads
-            </Badge>
-          </motion.div>
-
           <motion.h1
             variants={fadeInUp}
-            className="text-4xl md:text-6xl font-bold tracking-tight mb-6"
+            className="text-4xl md:text-5xl font-semibold tracking-tight mb-6 text-foreground"
           >
-            <span className="bg-gradient-to-r from-zinc-900 via-red-600 to-orange-500 dark:from-white dark:via-red-400 dark:to-orange-400 bg-clip-text text-transparent">
-              Download YouTube
-            </span>
-            <br />
-            <span className="text-foreground">Videos Instantly</span>
+            YouTube Video Downloader
           </motion.h1>
 
           <motion.p
             variants={fadeInUp}
             className="text-lg md:text-xl text-muted-foreground max-w-2xl mx-auto"
           >
-            Fast, free, and powerful YouTube video downloader. Save videos in HD quality
-            or extract audio in seconds.
+            Download videos and audio from YouTube in your preferred format and quality.
           </motion.p>
         </motion.div>
 
@@ -301,7 +314,7 @@ export default function Home() {
           transition={{ delay: 0.3, duration: 0.5 }}
           className="w-full max-w-2xl mx-auto"
         >
-          <Card className="shadow-2xl shadow-red-500/10 border-2 border-red-100/50 dark:border-red-900/20 overflow-hidden">
+          <Card className="shadow-lg border border-slate-200 dark:border-slate-800 overflow-hidden bg-gradient-to-b from-white to-slate-50/50 dark:from-slate-900 dark:to-slate-900/50">
             <CardContent className="p-6 md:p-8">
               <div className="flex flex-col md:flex-row gap-3 mb-6">
                 <div className="relative flex-1">
@@ -318,7 +331,7 @@ export default function Home() {
                 <Button
                   onClick={handleAnalyze}
                   disabled={!url || downloadState.status === "analyzing" || downloadState.status === "downloading"}
-                  className="h-12 px-6 bg-gradient-to-r from-red-600 to-red-500 hover:from-red-700 hover:to-red-600 text-white font-semibold shadow-lg shadow-red-500/25 transition-all hover:shadow-xl hover:shadow-red-500/30"
+                  className="h-12 px-6 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-medium"
                 >
                   {downloadState.status === "analyzing" ? (
                     <Loader2 className="w-5 h-5 animate-spin" />
@@ -356,9 +369,9 @@ export default function Home() {
                     exit={{ opacity: 0, height: 0 }}
                     className="mb-6"
                   >
-                    <div className="p-4 bg-muted/50 rounded-xl border">
+                    <div className="p-4 bg-muted/50 rounded-lg border">
                       <div className="flex flex-col md:flex-row gap-4">
-                        <div className="relative w-full md:w-48 h-28 flex-shrink-0 rounded-lg overflow-hidden bg-black/10">
+                        <div className="relative w-full md:w-48 h-28 flex-shrink-0 rounded-md overflow-hidden bg-black/10">
                           <img
                             src={videoInfo.thumbnail}
                             alt={videoInfo.title}
@@ -425,7 +438,7 @@ export default function Home() {
                     </div>
                     <div>
                       <label className="text-sm font-medium mb-2 block">Quality</label>
-                      <Select value={quality} onValueChange={setQuality}>
+                      <Select value={quality} onValueChange={(v) => v && setQuality(v)}>
                         <SelectTrigger className="bg-muted/50">
                           <SelectValue />
                         </SelectTrigger>
@@ -434,7 +447,7 @@ export default function Home() {
                             availableFormats.map((f) => (
                               <SelectItem key={`${f.format}-${f.quality}`} value={f.quality}>
                                 <div className="flex items-center gap-2">
-                                  <HighDefinition className="w-4 h-4" />
+                                  <Hd className="w-4 h-4" />
                                   {f.label}
                                 </div>
                               </SelectItem>
@@ -459,7 +472,7 @@ export default function Home() {
                     <Button
                       onClick={handleDownload}
                       disabled={downloadState.status === "downloading" || downloadState.status === "completed"}
-                      className="w-full h-14 text-lg font-semibold bg-gradient-to-r from-red-600 to-red-500 hover:from-red-700 hover:to-red-600 text-white shadow-lg shadow-red-500/25"
+                      className="w-full h-14 text-lg font-medium bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white"
                     >
                       {downloadState.status === "downloading" ? (
                         <div className="flex items-center gap-3">
@@ -490,9 +503,9 @@ export default function Home() {
                     exit={{ opacity: 0, height: 0 }}
                     className="mt-4"
                   >
-                    <div className="h-2 bg-muted rounded-full overflow-hidden">
+                    <div className="h-2 bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden">
                       <motion.div
-                        className="h-full bg-gradient-to-r from-red-600 to-orange-500"
+                        className="h-full bg-gradient-to-r from-blue-500 to-indigo-500"
                         initial={{ width: 0 }}
                         animate={{ width: `${Math.min(downloadState.progress, 100)}%` }}
                         transition={{ duration: 0.3 }}
@@ -511,30 +524,38 @@ export default function Home() {
                     initial={{ opacity: 0, height: 0 }}
                     animate={{ opacity: 1, height: "auto" }}
                     exit={{ opacity: 0, height: 0 }}
-                    className="mt-4 p-4 bg-green-50 dark:bg-green-950/30 rounded-xl border border-green-200 dark:border-green-800"
                   >
-                    <div className="flex items-center gap-3 mb-3">
-                      <div className="w-10 h-10 bg-green-100 dark:bg-green-900 rounded-full flex items-center justify-center">
-                        <Check className="w-5 h-5 text-green-600 dark:text-green-400" />
+                    <div className="mt-4 p-4 bg-green-50 dark:bg-green-950/30 rounded-lg border border-green-200 dark:border-green-800">
+                      <div className="flex items-center gap-3 mb-3">
+                        <div className="w-10 h-10 bg-green-100 dark:bg-green-900 rounded-full flex items-center justify-center">
+                          <Check className="w-5 h-5 text-green-600 dark:text-green-400" />
+                        </div>
+                        <div>
+                          <p className="font-semibold text-green-800 dark:text-green-400">
+                            Download Ready!
+                          </p>
+                          <p className="text-sm text-green-600 dark:text-green-500">
+                            Your file is ready to download
+                          </p>
+                        </div>
                       </div>
-                      <div>
-                        <p className="font-semibold text-green-800 dark:text-green-400">
-                          Download Ready!
-                        </p>
-                        <p className="text-sm text-green-600 dark:text-green-500">
-                          Your file is ready to download
-                        </p>
+                      <div className="flex gap-2">
+                        <Button 
+                          className="flex-1 bg-green-600 hover:bg-green-700 text-white"
+                          onClick={() => {
+                            if (downloadState.downloadUrl) {
+                              window.location.href = downloadState.downloadUrl;
+                            }
+                          }}
+                        >
+                          <Download className="w-4 h-4 mr-2" />
+                          Save File
+                        </Button>
+                        <Button variant="outline" onClick={resetForm}>
+                          <RefreshCw className="w-4 h-4 mr-2" />
+                          New Download
+                        </Button>
                       </div>
-                    </div>
-                    <div className="flex gap-2">
-                      <Button className="flex-1 bg-green-600 hover:bg-green-700 text-white">
-                        <Download className="w-4 h-4 mr-2" />
-                        Save File
-                      </Button>
-                      <Button variant="outline" onClick={resetForm}>
-                        <RefreshCw className="w-4 h-4 mr-2" />
-                        New Download
-                      </Button>
                     </div>
                   </motion.div>
                 )}
@@ -550,13 +571,12 @@ export default function Home() {
           className="flex flex-wrap items-center justify-center gap-6 mt-8 text-sm text-muted-foreground"
         >
           {[
-            { icon: Check, text: "Free Forever" },
-            { icon: Shield, text: "No Registration" },
-            { icon: Zap, text: "Unlimited Downloads" },
-            { icon: Sparkles, text: "High Quality" },
+            { icon: Check, text: "No registration required" },
+            { icon: Shield, text: "Privacy focused" },
+            { icon: Hd, text: "Multiple formats & qualities" },
           ].map((badge) => (
             <div key={badge.text} className="flex items-center gap-2">
-              <badge.icon className="w-4 h-4 text-green-500" />
+              <badge.icon className="w-4 h-4 text-muted-foreground" />
               {badge.text}
             </div>
           ))}
@@ -592,9 +612,9 @@ export default function Home() {
             viewport={{ once: true }}
             className="text-center mb-16"
           >
-            <h2 className="text-3xl md:text-4xl font-bold mb-4">Why Choose Athena?</h2>
+            <h2 className="text-3xl md:text-4xl font-semibold mb-4">Features</h2>
             <p className="text-muted-foreground text-lg max-w-2xl mx-auto">
-              The most powerful and user-friendly YouTube downloader available
+              Simple tools for downloading YouTube content
             </p>
           </motion.div>
 
@@ -607,10 +627,10 @@ export default function Home() {
           >
             {features.map((feature, index) => (
               <motion.div key={index} variants={fadeInUp}>
-                <Card className="h-full border-0 shadow-lg hover:shadow-xl transition-shadow bg-gradient-to-br from-card to-muted/50">
+                <Card className="h-full border shadow-sm hover:shadow-md transition-shadow bg-gradient-to-b from-white to-slate-50/50 dark:from-slate-900 dark:to-slate-900/50">
                   <CardHeader className="pb-4">
-                    <div className="w-12 h-12 bg-gradient-to-br from-red-100 to-red-50 dark:from-red-950/30 dark:to-red-900/20 rounded-xl flex items-center justify-center mb-4">
-                      <feature.icon className="w-6 h-6 text-red-600 dark:text-red-400" />
+                    <div className="w-12 h-12 bg-gradient-to-br from-blue-100 to-indigo-100 dark:from-blue-950/30 dark:to-indigo-950/30 rounded-lg flex items-center justify-center mb-4">
+                      <feature.icon className="w-6 h-6 text-blue-600 dark:text-blue-400" />
                     </div>
                     <CardTitle className="text-lg">{feature.title}</CardTitle>
                   </CardHeader>
@@ -651,7 +671,7 @@ export default function Home() {
               { step: "3", title: "Download", desc: "Choose format and quality, then download" },
             ].map((item, index) => (
               <motion.div key={index} variants={fadeInUp} className="text-center">
-                <div className="w-16 h-16 bg-gradient-to-br from-red-600 to-orange-500 text-white rounded-2xl flex items-center justify-center text-2xl font-bold mx-auto mb-4 shadow-xl shadow-red-500/30">
+                <div className="w-16 h-16 bg-gradient-to-br from-blue-600 to-indigo-600 text-white rounded-lg flex items-center justify-center text-2xl font-semibold mx-auto mb-4 shadow-lg shadow-blue-500/20">
                   {item.step}
                 </div>
                 <h3 className="font-semibold text-lg mb-2">{item.title}</h3>
@@ -706,7 +726,7 @@ export default function Home() {
               },
             ].map((faq, index) => (
               <motion.div key={index} variants={fadeInUp}>
-                <Card className="border-0 shadow-md hover:shadow-lg transition-shadow">
+                <Card className="border shadow-sm hover:shadow-md transition-shadow">
                   <CardHeader>
                     <CardTitle className="text-base">{faq.q}</CardTitle>
                   </CardHeader>
@@ -720,42 +740,17 @@ export default function Home() {
         </div>
       </section>
 
-      <section className="py-20 px-4">
-        <motion.div
-          initial={{ opacity: 0, scale: 0.95 }}
-          whileInView={{ opacity: 1, scale: 1 }}
-          viewport={{ once: true }}
-          className="container mx-auto max-w-4xl"
-        >
-          <div className="bg-gradient-to-br from-red-600 to-orange-500 rounded-3xl p-8 md:p-12 text-center text-white">
-            <h2 className="text-3xl md:text-4xl font-bold mb-4">Ready to Start Downloading?</h2>
-            <p className="text-lg text-white/90 mb-8 max-w-xl mx-auto">
-              Join thousands of users who trust Athena for their YouTube downloads
-            </p>
-            <Button
-              size="lg"
-              variant="secondary"
-              onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
-              className="bg-white text-red-600 hover:bg-white/90 shadow-xl"
-            >
-              <Download className="w-5 h-5 mr-2" />
-              Start Downloading Now
-            </Button>
-          </div>
-        </motion.div>
-      </section>
-
       <footer className="border-t py-12 px-4 bg-background">
         <div className="container mx-auto max-w-6xl">
           <div className="flex flex-col md:flex-row items-center justify-between gap-6">
             <div className="flex items-center gap-2">
-              <div className="w-8 h-8 bg-gradient-to-br from-red-500 to-red-600 rounded-lg flex items-center justify-center">
-                <YoutubeIcon className="w-5 h-5 text-white" />
+              <div className="w-8 h-8 bg-slate-900 dark:bg-slate-100 rounded-md flex items-center justify-center">
+                <YoutubeIcon className="w-5 h-5 text-white dark:text-slate-900" />
               </div>
-              <span className="font-bold text-lg">Athena</span>
+              <span className="font-semibold text-lg">Athena</span>
             </div>
             <p className="text-sm text-muted-foreground text-center">
-              © 2026 Athena. Free YouTube video downloader. Made with ❤️ for the community.
+              © 2026 Athena. Free YouTube video downloader.
             </p>
             <div className="flex items-center gap-6">
               <a href="#" className="text-sm text-muted-foreground hover:text-foreground transition-colors">
@@ -765,7 +760,7 @@ export default function Home() {
                 Terms
               </a>
               <a
-                href="https://github.com"
+                href="https://github.com/Grinsefein/athena"
                 target="_blank"
                 rel="noopener noreferrer"
                 className="text-sm text-muted-foreground hover:text-foreground transition-colors flex items-center gap-1"

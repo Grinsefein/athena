@@ -1,38 +1,49 @@
-from fastapi import FastAPI, HTTPException, BackgroundTasks
-from fastapi.responses import StreamingResponse, FileResponse, HTMLResponse
-from fastapi.staticfiles import StaticFiles
-from fastapi.middleware.cors import CORSMiddleware
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Request
+from fastapi.responses import StreamingResponse, FileResponse, HTMLResponse, JSONResponse
 from pydantic import BaseModel, HttpUrl
 import yt_dlp
 import asyncio
 import json
 import os
 import uuid
+import time
 from pathlib import Path
 from typing import Optional
 import logging
+from logging.handlers import RotatingFileHandler
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Set up Production Logging
+log_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+log_handler = RotatingFileHandler('athena.log', maxBytes=5*1024*1024, backupCount=2)
+log_handler.setFormatter(log_formatter)
 
-app = FastAPI(title="Athena Pi", version="1.0.0")
+logger = logging.getLogger("athena")
+logger.setLevel(logging.INFO)
+logger.addHandler(log_handler)
 
-# CORS for local development
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+console_handler = logging.StreamHandler()
+console_handler.setFormatter(log_formatter)
+logger.addHandler(console_handler)
+
+app = FastAPI(title="Athena Pi", version="1.0.0", docs_url=None, redoc_url=None) # Hide docs in prod
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    logger.error(f"Global exception: {exc}", exc_info=True)
+    return JSONResponse(
+        status_code=500,
+        content={"success": False, "error": "Internal server error occurred."}
+    )
 
 # Configuration
 DOWNLOAD_DIR = Path(os.getenv("DOWNLOAD_DIR", "./downloads"))
 DOWNLOAD_DIR.mkdir(exist_ok=True)
 MAX_FILE_AGE_HOURS = 24
+MAX_CONCURRENT_DOWNLOADS = int(os.getenv("MAX_CONCURRENT_DOWNLOADS", "2"))
 
-# Active downloads storage (in-memory, lightweight)
+# Active downloads storage & Semaphore
 active_downloads = {}
+download_semaphore = None
 
 
 class DownloadRequest(BaseModel):
@@ -127,16 +138,17 @@ async def start_download(request: DownloadRequest, background_tasks: BackgroundT
     download_id = str(uuid.uuid4())[:8]
     
     active_downloads[download_id] = {
-        "status": "processing",
+        "status": "queued",
         "progress": 0,
         "file_path": None,
         "file_name": None,
-        "error": None
+        "error": None,
+        "timestamp": time.time()
     }
     
-    # Start download in background
+    # Start download in background via queue
     background_tasks.add_task(
-        download_video_task,
+        queued_download_task,
         download_id,
         str(request.url),
         request.format,
@@ -147,7 +159,7 @@ async def start_download(request: DownloadRequest, background_tasks: BackgroundT
         "success": True,
         "data": {
             "downloadId": download_id,
-            "status": "processing"
+            "status": "queued"
         }
     }
 
@@ -203,6 +215,22 @@ async def download_file(download_id: str):
         filename=download["file_name"],
         media_type="application/octet-stream"
     )
+
+
+async def queued_download_task(download_id: str, url: str, format_type: str, quality: str):
+    """Enforce concurrency control before blocking yt-dlp"""
+    try:
+        logger.info(f"Download {download_id} waiting in queue...")
+        async with download_semaphore:
+            if download_id in active_downloads:
+                active_downloads[download_id]["status"] = "processing"
+            logger.info(f"Download {download_id} starting processing...")
+            await asyncio.to_thread(download_video_task, download_id, url, format_type, quality)
+    except Exception as e:
+        logger.error(f"Task error for {download_id}: {e}", exc_info=True)
+        if download_id in active_downloads:
+            active_downloads[download_id]["status"] = "error"
+            active_downloads[download_id]["error"] = str(e)
 
 
 def download_video_task(download_id: str, url: str, format_type: str, quality: str):
@@ -277,23 +305,45 @@ def download_video_task(download_id: str, url: str, format_type: str, quality: s
         active_downloads[download_id]["error"] = str(e)
 
 
-# Cleanup old files periodically
+# Cleanup old files and memory periodically
 @app.on_event("startup")
 async def startup_event():
-    """Clean old downloads on startup"""
-    cleanup_old_files()
+    """Start periodic cleanup task"""
+    global download_semaphore
+    download_semaphore = asyncio.Semaphore(MAX_CONCURRENT_DOWNLOADS)
+    asyncio.create_task(periodic_cleanup())
 
 
-def cleanup_old_files():
-    """Remove files older than MAX_FILE_AGE_HOURS"""
+async def periodic_cleanup():
+    while True:
+        cleanup_old_data()
+        await asyncio.sleep(3600)  # Run every hour
+
+
+def cleanup_old_data():
+    """Remove files and dict entries older than MAX_FILE_AGE_HOURS"""
     try:
-        current_time = asyncio.get_event_loop().time()
+        current_time = time.time()
+        
+        # 1. Cleanup old files
         for file_path in DOWNLOAD_DIR.iterdir():
             if file_path.is_file():
                 file_age_hours = (current_time - file_path.stat().st_mtime) / 3600
                 if file_age_hours > MAX_FILE_AGE_HOURS:
                     file_path.unlink()
                     logger.info(f"Cleaned up old file: {file_path}")
+                    
+        # 2. Cleanup old memory records -> prevents RAM leak over months of Pi uptime
+        stale_ids = []
+        for did, dinfo in active_downloads.items():
+            age_hours = (current_time - dinfo.get("timestamp", current_time)) / 3600
+            if age_hours > MAX_FILE_AGE_HOURS:
+                stale_ids.append(did)
+                
+        for did in stale_ids:
+            del active_downloads[did]
+            logger.info(f"Cleaned up stale memory entry: {did}")
+            
     except Exception as e:
         logger.error(f"Cleanup error: {e}")
 
@@ -305,186 +355,150 @@ INDEX_HTML = """
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5">
-    <title>Athena Pi - Video Downloader</title>
+    <title>Athena Pi</title>
     <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
     <script src="https://cdn.tailwindcss.com"></script>
-    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%23dc2626'/%3E%3Cpath d='M35 30 L35 70 L75 50 Z' fill='white'/%3E%3C/svg%3E">
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%236366f1'/%3E%3Cpath d='M35 30 L35 70 L75 50 Z' fill='white'/%3E%3C/svg%3E">
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <style>
+        body { font-family: 'Outfit', sans-serif; }
         [x-cloak] { display: none !important; }
-        .progress-bar { transition: width 0.3s ease; }
+        .bg-animated { background-size: 200% 200%; animation: gradient 15s ease infinite; }
+        @keyframes gradient { 0% { background-position: 0% 50%; } 50% { background-position: 100% 50%; } 100% { background-position: 0% 50%; } }
+        .glass-card { backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px); }
+        .progress-bar { transition: width 0.4s cubic-bezier(0.4, 0, 0.2, 1); }
     </style>
 </head>
-<body class="h-full bg-gradient-to-br from-gray-50 to-gray-100 dark:from-gray-900 dark:to-gray-800"
+<body class="h-full bg-animated bg-gradient-to-br from-indigo-50 via-purple-50 to-pink-50 dark:from-slate-900 dark:via-purple-900/20 dark:to-slate-900"
       x-data="athenaApp()" x-init="init()">
     
-    <div class="min-h-full flex flex-col">
-        <!-- Header -->
-        <header class="sticky top-0 z-50 bg-white/80 dark:bg-gray-900/80 backdrop-blur border-b">
-            <div class="max-w-3xl mx-auto px-4 h-14 flex items-center justify-between">
-                <div class="flex items-center gap-2">
-                    <div class="w-8 h-8 bg-red-600 rounded-lg flex items-center justify-center">
-                        <svg class="w-5 h-5 text-white" viewBox="0 0 24 24" fill="currentColor">
-                            <path d="M8 5v14l11-7z"/>
-                        </svg>
+    <!-- Theme Toggle -->
+    <button @click="toggleTheme()" class="fixed top-4 right-4 z-50 p-3.5 rounded-2xl glass-card bg-white/40 dark:bg-black/30 border border-white/40 dark:border-white/10 shadow-xl hover:scale-110 active:scale-95 transition-all duration-300">
+        <svg x-show="!darkMode" class="w-5 h-5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"/></svg>
+        <svg x-show="darkMode" class="w-5 h-5 text-yellow-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"/></svg>
+    </button>
+
+    <main class="min-h-full flex items-center justify-center p-4 sm:p-8">
+        <div class="w-full max-w-lg">
+            
+            <!-- Glass Wrapper -->
+            <div class="glass-card bg-white/60 dark:bg-slate-800/60 rounded-[2rem] shadow-2xl border border-white/50 dark:border-slate-700/50 p-6 sm:p-8 relative overflow-hidden transition-all duration-500">
+                <!-- Decorative Blurs -->
+                <div class="absolute -top-24 -right-24 w-48 h-48 bg-purple-500/30 rounded-full blur-3xl pointer-events-none"></div>
+                <div class="absolute -bottom-24 -left-24 w-48 h-48 bg-indigo-500/20 rounded-full blur-3xl pointer-events-none"></div>
+
+                <div class="relative z-10">
+                    <!-- Minimal Header -->
+                    <div class="text-center mb-8">
+                        <div class="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-gradient-to-tr from-indigo-500 to-purple-500 text-white mb-5 shadow-lg shadow-indigo-500/30 ring-4 ring-white/50 dark:ring-slate-800/50">
+                            <svg class="w-7 h-7" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+                        </div>
+                        <h1 class="text-3xl sm:text-4xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-gray-900 to-gray-600 dark:from-white dark:to-gray-300 tracking-tight">Athena</h1>
+                        <p class="text-sm font-medium text-gray-500 dark:text-gray-400 mt-1">Pi Downloader</p>
                     </div>
-                    <span class="font-semibold text-lg">Athena Pi</span>
-                </div>
-                <button @click="toggleTheme()" class="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800">
-                    <svg x-show="!darkMode" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"/>
-                    </svg>
-                    <svg x-show="darkMode" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"/>
-                    </svg>
-                </button>
-            </div>
-        </header>
 
-        <!-- Main Content -->
-        <main class="flex-1 flex flex-col items-center justify-center p-4">
-            <div class="w-full max-w-xl">
-                <!-- Title -->
-                <div class="text-center mb-6">
-                    <h1 class="text-2xl sm:text-3xl font-bold mb-2">YouTube Downloader</h1>
-                    <p class="text-gray-600 dark:text-gray-400">Download videos on your Pi</p>
-                </div>
-
-                <!-- Input Card -->
-                <div class="bg-white dark:bg-gray-800 rounded-xl shadow-lg border p-4 sm:p-6">
-                    <!-- URL Input -->
-                    <div class="flex flex-col gap-3 mb-4">
-                        <div class="relative">
+                    <!-- Input Area -->
+                    <div class="space-y-4">
+                        <div class="relative group">
                             <input 
                                 type="url" 
                                 x-model="url"
                                 @keydown.enter="analyze()"
-                                placeholder="Paste YouTube URL..."
-                                class="w-full pl-10 pr-4 py-3 rounded-lg border bg-gray-50 dark:bg-gray-700 focus:ring-2 focus:ring-blue-500 outline-none"
+                                placeholder="Paste video link here..."
+                                class="w-full pl-5 pr-14 py-4 rounded-2xl bg-white/50 dark:bg-slate-900/50 border border-gray-200/50 dark:border-slate-700/50 focus:ring-2 focus:ring-indigo-500/50 focus:border-transparent outline-none transition-all duration-300 text-gray-800 dark:text-gray-100 placeholder-gray-400 font-medium"
                                 :disabled="loading"
                             >
-                            <svg class="absolute left-3 top-3.5 w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/>
-                            </svg>
-                        </div>
-                        <button 
-                            @click="analyze()"
-                            :disabled="!url || loading"
-                            class="py-3 px-6 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white font-medium rounded-lg transition flex items-center justify-center gap-2"
-                        >
-                            <svg x-show="loading" class="animate-spin w-5 h-5" fill="none" viewBox="0 0 24 24">
-                                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"/>
-                            </svg>
-                            <svg x-show="!loading" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/>
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
-                            </svg>
-                            <span x-text="loading ? 'Analyzing...' : 'Analyze'"></span>
-                        </button>
-                    </div>
-
-                    <!-- Error -->
-                    <div x-show="error" x-transition class="mb-4 p-3 bg-red-50 dark:bg-red-900/30 border border-red-200 rounded-lg flex items-center gap-2 text-red-700 dark:text-red-400">
-                        <svg class="w-5 h-5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
-                        </svg>
-                        <span x-text="error" class="text-sm"></span>
-                        <button @click="error = null" class="ml-auto p-1 hover:bg-red-100 rounded">
-                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/>
-                            </svg>
-                        </button>
-                    </div>
-
-                    <!-- Video Info -->
-                    <div x-show="videoInfo" x-transition class="mb-4">
-                        <div class="flex gap-3 p-3 bg-gray-50 dark:bg-gray-700/50 rounded-lg">
-                            <img :src="videoInfo?.thumbnail" class="w-24 h-16 object-cover rounded bg-gray-200 flex-shrink-0">
-                            <div class="min-w-0">
-                                <h3 x-text="videoInfo?.title" class="font-medium text-sm line-clamp-2 mb-1"></h3>
-                                <p x-text="videoInfo?.author" class="text-xs text-gray-500"></p>
-                                <span class="inline-flex items-center gap-1 mt-1 px-2 py-0.5 bg-green-100 text-green-700 text-xs rounded-full">
-                                    <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
-                                    </svg>
-                                    Ready
-                                </span>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- Format & Quality Selectors -->
-                    <div x-show="videoInfo" x-transition class="grid grid-cols-2 gap-3 mb-4">
-                        <div>
-                            <label class="text-sm font-medium mb-1 block">Format</label>
-                            <select x-model="format" class="w-full p-2.5 rounded-lg border bg-gray-50 dark:bg-gray-700">
-                                <option value="mp4">MP4 Video</option>
-                                <option value="mp3">MP3 Audio</option>
-                                <option value="webm">WebM Video</option>
-                            </select>
-                        </div>
-                        <div>
-                            <label class="text-sm font-medium mb-1 block">Quality</label>
-                            <select x-model="quality" class="w-full p-2.5 rounded-lg border bg-gray-50 dark:bg-gray-700">
-                                <option value="best">Best Available</option>
-                                <template x-for="fmt in videoInfo?.formats || []">
-                                    <option :value="fmt.quality" x-text="fmt.label"></option>
-                                </template>
-                            </select>
-                        </div>
-                    </div>
-
-                    <!-- Download Button -->
-                    <button 
-                        x-show="videoInfo"
-                        @click="download()"
-                        :disabled="downloading || completed"
-                        class="w-full py-4 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 disabled:from-gray-400 disabled:to-gray-500 text-white font-medium rounded-lg transition flex items-center justify-center gap-2"
-                    >
-                        <svg x-show="downloading" class="animate-spin w-5 h-5" fill="none" viewBox="0 0 24 24">
-                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"/>
-                        </svg>
-                        <svg x-show="!downloading && !completed" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
-                        </svg>
-                        <svg x-show="completed" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
-                        </svg>
-                        <span x-text="downloading ? `Downloading... ${progress}%` : (completed ? 'Complete!' : `Download ${format.toUpperCase()}`)"></span>
-                    </button>
-
-                    <!-- Progress Bar -->
-                    <div x-show="downloading" x-transition class="mt-3">
-                        <div class="h-2 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
-                            <div class="h-full bg-gradient-to-r from-blue-500 to-indigo-500 progress-bar" :style="`width: ${progress}%`"></div>
-                        </div>
-                        <p class="text-xs text-gray-500 text-center mt-2">Don't close this tab</p>
-                    </div>
-
-                    <!-- Download Complete -->
-                    <div x-show="completed" x-transition class="mt-3 p-3 bg-green-50 dark:bg-green-900/30 border border-green-200 rounded-lg">
-                        <div class="flex items-center gap-2 mb-3">
-                            <div class="w-8 h-8 bg-green-100 rounded-full flex items-center justify-center">
-                                <svg class="w-4 h-4 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+                            <button 
+                                @click="analyze()"
+                                :disabled="!url || loading"
+                                class="absolute right-2 top-2 p-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 active:scale-95 disabled:opacity-50 disabled:active:scale-100 text-white transition-all duration-300 shadow-md"
+                            >
+                                <svg x-show="loading" class="animate-spin w-5 h-5" fill="none" viewBox="0 0 24 24">
+                                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"/>
                                 </svg>
-                            </div>
-                            <span class="font-medium text-green-800 dark:text-green-400">Ready!</span>
-                        </div>
-                        <div class="flex gap-2">
-                            <a :href="downloadUrl" download class="flex-1 py-2.5 bg-green-600 hover:bg-green-700 text-white text-center rounded-lg font-medium">
-                                Save File
-                            </a>
-                            <button @click="reset()" class="px-4 py-2.5 border rounded-lg hover:bg-gray-50">
-                                New
+                                <svg x-show="!loading" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"/>
+                                </svg>
                             </button>
                         </div>
+
+                        <!-- Error Toast -->
+                        <div x-show="error" x-transition class="text-center text-sm font-bold text-red-500 bg-red-500/10 py-3 px-4 rounded-xl border border-red-500/20" x-text="error"></div>
+
+                        <!-- Video Info & Options -->
+                        <div x-show="videoInfo" x-transition:enter="transition ease-out duration-500 delay-100" x-transition:enter-start="opacity-0 translate-y-4" x-transition:enter-end="opacity-100 translate-y-0" class="space-y-4 mt-6" x-cloak>
+                            
+                            <!-- Media Card -->
+                            <div class="flex items-center gap-4 p-3 rounded-2xl bg-white/40 dark:bg-slate-900/40 border border-white/40 dark:border-slate-700/30">
+                                <div class="relative w-20 h-20 rounded-xl overflow-hidden shadow-sm flex-shrink-0 bg-gray-200 dark:bg-gray-800">
+                                    <img :src="videoInfo?.thumbnail" class="absolute inset-0 w-full h-full object-cover">
+                                </div>
+                                <div class="min-w-0 pr-2">
+                                    <h3 x-text="videoInfo?.title" class="font-bold text-gray-800 dark:text-gray-100 truncate text-sm sm:text-base"></h3>
+                                    <p x-text="videoInfo?.author" class="text-xs sm:text-sm font-medium text-gray-500 dark:text-gray-400 truncate mt-0.5"></p>
+                                </div>
+                            </div>
+
+                            <!-- Options Grid -->
+                            <div class="grid grid-cols-2 gap-3">
+                                <select x-model="format" class="w-full p-3.5 rounded-xl bg-white/50 dark:bg-slate-900/50 border border-gray-200/50 dark:border-slate-700/50 text-sm font-semibold text-gray-700 dark:text-gray-200 outline-none focus:ring-2 focus:ring-indigo-500/50 appearance-none cursor-pointer hover:bg-white/70 dark:hover:bg-slate-900/70 transition-colors">
+                                    <option value="mp4">Video (MP4)</option>
+                                    <option value="mp3">Audio (MP3)</option>
+                                    <option value="webm">Video (WebM)</option>
+                                </select>
+                                <select x-model="quality" class="w-full p-3.5 rounded-xl bg-white/50 dark:bg-slate-900/50 border border-gray-200/50 dark:border-slate-700/50 text-sm font-semibold text-gray-700 dark:text-gray-200 outline-none focus:ring-2 focus:ring-indigo-500/50 appearance-none cursor-pointer hover:bg-white/70 dark:hover:bg-slate-900/70 transition-colors">
+                                    <option value="best">Highest</option>
+                                    <template x-for="fmt in videoInfo?.formats || []">
+                                        <option :value="fmt.quality" x-text="fmt.label"></option>
+                                    </template>
+                                </select>
+                            </div>
+
+                            <!-- Action Button -->
+                            <div class="pt-2">
+                                <button 
+                                    @click="download()"
+                                    :disabled="downloading || completed"
+                                    class="relative overflow-hidden w-full py-4 rounded-2xl font-bold text-white transition-all duration-300 hover:scale-[1.02] active:scale-95 disabled:hover:scale-100 group"
+                                    :class="(downloading || completed) ? 'bg-indigo-400/80 dark:bg-indigo-900/80 backdrop-blur-md cursor-not-allowed' : 'bg-gradient-to-r from-indigo-500 to-purple-600 shadow-xl shadow-indigo-500/30 hover:shadow-indigo-500/40'"
+                                >
+                                    <!-- Progress Layer -->
+                                    <div x-show="downloading && !queued" class="absolute inset-0 bg-indigo-600/60 dark:bg-indigo-500/60 origin-left progress-bar rounded-2xl" :style="`width: ${progress}%`"></div>
+                                    <div x-show="queued" class="absolute inset-0 bg-yellow-500/30 dark:bg-yellow-600/30 animate-pulse rounded-2xl"></div>
+                                    
+                                    <div class="relative flex items-center justify-center gap-2 z-10">
+                                        <svg x-show="downloading" class="animate-spin w-5 h-5 text-white/90" fill="none" viewBox="0 0 24 24">
+                                            <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                            <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"/>
+                                        </svg>
+                                        <svg x-show="!downloading && !completed" class="w-5 h-5 transition-transform group-hover:-translate-y-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+                                        </svg>
+                                        <svg x-show="completed" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/>
+                                        </svg>
+                                        <span x-text="downloading ? (queued ? 'Queued (Waiting in line...)' : `Transferring • ${progress}%`) : (completed ? 'Operation Complete!' : 'Begin Download')"></span>
+                                    </div>
+                                </button>
+                            </div>
+
+                            <!-- Finished State Docs -->
+                            <div x-show="completed" x-transition:enter="transition ease-out duration-500 delay-150" x-transition:enter-start="opacity-0 scale-95" x-transition:enter-end="opacity-100 scale-100" class="pt-2 flex gap-3" x-cloak>
+                                <a :href="downloadUrl" download class="flex-1 py-3.5 bg-gradient-to-br from-green-400 to-emerald-600 text-white shadow-lg shadow-emerald-500/20 text-center rounded-xl font-bold hover:scale-[1.02] active:scale-95 transition-all outline-none">
+                                    Save to Device
+                                </a>
+                                <button @click="reset()" class="flex-none px-6 py-3.5 rounded-xl bg-white/60 dark:bg-slate-900/60 border border-gray-200/50 dark:border-slate-700/50 text-gray-700 dark:text-gray-200 font-bold hover:scale-[1.02] active:scale-95 hover:bg-white dark:hover:bg-slate-800 transition-all outline-none">
+                                    Next
+                                </button>
+                            </div>
+                        </div>
+
                     </div>
                 </div>
             </div>
-        </main>
-    </div>
+        </div>
+    </main>
 
     <script>
         function athenaApp() {
@@ -495,6 +509,7 @@ INDEX_HTML = """
                 loading: false,
                 downloading: false,
                 completed: false,
+                queued: false,
                 progress: 0,
                 error: null,
                 videoInfo: null,
@@ -504,7 +519,7 @@ INDEX_HTML = """
                 eventSource: null,
 
                 init() {
-                    this.darkMode = localStorage.getItem('darkMode') === 'true';
+                    this.darkMode = localStorage.getItem('darkMode') === 'true' || (!('darkMode' in localStorage) && window.matchMedia('(prefers-color-scheme: dark)').matches);
                     this.updateTheme();
                 },
 
@@ -535,14 +550,11 @@ INDEX_HTML = """
                         });
 
                         const data = await response.json();
+                        if (!data.success) throw new Error('Failed to analyze');
                         
-                        if (!data.success) {
-                            throw new Error('Failed to analyze');
-                        }
-
                         this.videoInfo = data.data;
                     } catch (e) {
-                        this.error = 'Failed to analyze video. Check the URL.';
+                        this.error = 'Unrecognized link. Check URL parameters.';
                     } finally {
                         this.loading = false;
                     }
@@ -565,24 +577,19 @@ INDEX_HTML = """
                         });
 
                         const data = await response.json();
+                        if (!data.success) throw new Error('Failed to initiate');
                         
-                        if (!data.success) {
-                            throw new Error('Failed to start download');
-                        }
-
                         this.downloadId = data.data.downloadId;
+                        this.queued = (data.data.status === 'queued');
                         this.connectSSE();
                     } catch (e) {
-                        this.error = 'Download failed to start.';
+                        this.error = 'Transfer failed to start.';
                         this.downloading = false;
                     }
                 },
 
                 connectSSE() {
-                    if (this.eventSource) {
-                        this.eventSource.close();
-                    }
-
+                    if (this.eventSource) this.eventSource.close();
                     this.eventSource = new EventSource(`/api/progress/${this.downloadId}`);
                     
                     this.eventSource.onmessage = (event) => {
@@ -595,23 +602,28 @@ INDEX_HTML = """
                             return;
                         }
 
+                        if (data.status === 'queued') {
+                            this.queued = true;
+                        } else if (data.status === 'processing') {
+                            this.queued = false;
+                        }
+
                         this.progress = data.progress || 0;
 
                         if (data.status === 'completed') {
                             this.downloading = false;
+                            this.queued = false;
                             this.completed = true;
                             this.downloadUrl = data.downloadUrl;
                             this.eventSource.close();
                         } else if (data.status === 'error') {
-                            this.error = data.error || 'Download failed';
+                            this.error = data.error || 'Transfer failed';
                             this.downloading = false;
                             this.eventSource.close();
                         }
                     };
 
-                    this.eventSource.onerror = () => {
-                        this.eventSource.close();
-                    };
+                    this.eventSource.onerror = () => this.eventSource.close();
                 },
 
                 reset() {
@@ -621,13 +633,12 @@ INDEX_HTML = """
                     this.quality = 'best';
                     this.downloading = false;
                     this.completed = false;
+                    this.queued = false;
                     this.progress = 0;
                     this.error = null;
                     this.downloadId = null;
                     this.downloadUrl = null;
-                    if (this.eventSource) {
-                        this.eventSource.close();
-                    }
+                    if (this.eventSource) this.eventSource.close();
                 }
             }
         }

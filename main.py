@@ -354,451 +354,280 @@ INDEX_HTML = """
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>Athena Pi</title>
     <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {}
+            }
+        }
+    </script>
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='20' fill='%236366f1'/%3E%3Cpath d='M35 30 L35 70 L75 50 Z' fill='white'/%3E%3C/svg%3E">
     <style>
+        /* Base */
         *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
         html, body { height: 100%; }
         body { 
-            font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            background: #f9fafb;
+            font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
         }
-        body.dark { background: #111827; }
         [x-cloak] { display: none !important; }
         
-        .container {
-            min-height: 100vh;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            padding: 16px;
+        /* Dotted Background Pattern */
+        .bg-dots {
+            background-color: #f8fafc;
+            background-image: radial-gradient(#cbd5e1 1px, transparent 1px);
+            background-size: 24px 24px;
+        }
+        .dark .bg-dots {
+            background-color: #0f172a;
+            background-image: radial-gradient(#334155 1px, transparent 1px);
         }
         
-        .card {
-            width: 100%;
-            max-width: 400px;
-            background: white;
-            border-radius: 16px;
-            box-shadow: 0 10px 25px -5px rgba(0,0,0,0.1), 0 8px 10px -6px rgba(0,0,0,0.1);
-            border: 1px solid #f3f4f6;
-            padding: 24px;
+        /* Glass Morphism */
+        .glass {
+            background: rgba(255, 255, 255, 0.7);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.3);
         }
-        .dark .card { background: #1f2937; border-color: #374151; }
-        
-        .header {
-            text-align: center;
-            margin-bottom: 24px;
+        .dark .glass, .dark.glass {
+            background: rgba(17, 24, 39, 0.85);
+            border: 1px solid rgba(75, 85, 99, 0.4);
         }
         
-        .logo {
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            width: 48px;
-            height: 48px;
-            border-radius: 12px;
-            background: #4f46e5;
-            color: white;
-            margin-bottom: 12px;
+        /* Card Transitions */
+        .card-container {
+            transition: all 0.5s cubic-bezier(0.4, 0, 0.2, 1);
         }
         
-        h1 {
-            font-size: 24px;
-            font-weight: 700;
-            color: #111827;
-            margin-bottom: 4px;
-        }
-        .dark h1 { color: white; }
-        
-        .subtitle {
-            font-size: 14px;
-            color: #6b7280;
-        }
-        .dark .subtitle { color: #9ca3af; }
-        
-        .input-wrap {
-            position: relative;
-            margin-bottom: 16px;
-        }
-        
-        input[type="url"] {
-            width: 100%;
-            padding: 12px 44px 12px 16px;
-            border-radius: 12px;
-            border: 1px solid #e5e7eb;
-            background: #f9fafb;
-            font-size: 15px;
-            outline: none;
-            color: #1f2937;
-        }
-        input[type="url"]:focus {
-            border-color: #4f46e5;
-            box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.1);
-        }
-        .dark input[type="url"] {
-            background: #111827;
-            border-color: #4b5563;
-            color: #f3f4f6;
-        }
-        input[type="url"]:disabled { opacity: 0.6; cursor: not-allowed; }
-        
-        .input-btn {
-            position: absolute;
-            right: 6px;
-            top: 6px;
-            padding: 6px;
-            border-radius: 8px;
-            background: #4f46e5;
-            border: none;
-            color: white;
-            cursor: pointer;
-        }
-        .input-btn:hover { background: #4338ca; }
-        .input-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-        
-        .error-box {
-            text-align: center;
-            font-size: 14px;
-            color: #dc2626;
-            background: #fef2f2;
-            padding: 8px 12px;
-            border-radius: 8px;
-            margin-bottom: 12px;
-        }
-        .dark .error-box {
-            color: #f87171;
-            background: rgba(220, 38, 38, 0.1);
-        }
-        
-        .video-info {
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            padding: 8px;
-            border-radius: 12px;
-            background: #f9fafb;
-            margin-bottom: 12px;
-        }
-        .dark .video-info { background: #111827; }
-        
-        .thumb {
-            width: 64px;
-            height: 64px;
-            border-radius: 8px;
-            overflow: hidden;
-            background: #e5e7eb;
-            flex-shrink: 0;
-        }
-        .dark .thumb { background: #374151; }
-        .thumb img { width: 100%; height: 100%; object-fit: cover; }
-        
-        .video-meta { min-width: 0; }
-        .video-title {
-            font-weight: 600;
-            font-size: 14px;
-            color: #1f2937;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }
-        .dark .video-title { color: #f3f4f6; }
-        .video-author {
-            font-size: 12px;
-            color: #6b7280;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }
-        .dark .video-author { color: #9ca3af; }
-        
-        .select-row {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 8px;
-            margin-bottom: 12px;
-        }
-        
-        .dropdown {
-            position: relative;
-        }
-        .dropdown-trigger {
-            width: 100%;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 10px 12px;
-            border-radius: 10px;
-            border: 1px solid #e5e7eb;
-            background: white;
-            font-size: 14px;
-            color: #374151;
-            cursor: pointer;
-            transition: all 0.15s ease;
-        }
-        .dropdown-trigger:hover {
-            border-color: #d1d5db;
-            background: #f9fafb;
-        }
-        .dropdown-trigger:focus {
-            outline: none;
-            border-color: #4f46e5;
-            box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.1);
-        }
-        .dark .dropdown-trigger {
-            background: #1f2937;
-            border-color: #4b5563;
-            color: #e5e7eb;
-        }
-        .dark .dropdown-trigger:hover {
-            background: #374151;
-            border-color: #6b7280;
-        }
-        .dropdown-trigger svg {
-            width: 16px;
-            height: 16px;
-            color: #9ca3af;
-            transition: transform 0.15s ease;
-        }
-        .dropdown-trigger.active svg {
-            transform: rotate(180deg);
-        }
-        
-        .dropdown-menu {
-            position: absolute;
-            top: calc(100% + 4px);
-            left: 0;
-            right: 0;
-            background: white;
-            border: 1px solid #e5e7eb;
-            border-radius: 10px;
-            box-shadow: 0 10px 25px -5px rgba(0,0,0,0.15), 0 8px 10px -6px rgba(0,0,0,0.1);
-            z-index: 100;
-            max-height: 200px;
-            overflow-y: auto;
-        }
-        .dark .dropdown-menu {
-            background: #1f2937;
-            border-color: #4b5563;
-        }
-        
-        .dropdown-item {
-            padding: 10px 12px;
-            font-size: 14px;
-            color: #374151;
-            cursor: pointer;
-            transition: background 0.15s ease;
-        }
-        .dropdown-item:hover {
-            background: #f3f4f6;
-        }
-        .dropdown-item.selected {
-            background: #eef2ff;
-            color: #4f46e5;
-            font-weight: 500;
-        }
-        .dark .dropdown-item {
-            color: #e5e7eb;
-        }
-        .dark .dropdown-item:hover {
-            background: #374151;
-        }
-        .dark .dropdown-item.selected {
-            background: rgba(79, 70, 229, 0.2);
-            color: #818cf8;
-        }
-        
-        .btn {
-            position: relative;
-            width: 100%;
-            padding: 12px;
-            border-radius: 12px;
-            border: none;
-            font-weight: 600;
-            font-size: 14px;
-            color: white;
-            cursor: pointer;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 8px;
-            overflow: hidden;
-        }
-        .btn:disabled { cursor: not-allowed; }
-        .btn-primary { background: #4f46e5; }
-        .btn-primary:hover:not(:disabled) { background: #4338ca; }
-        .btn-primary:disabled { background: #818cf8; }
-        
+        /* Progress Bar Animation */
         .progress-fill {
-            position: absolute;
-            left: 0;
-            top: 0;
-            bottom: 0;
-            background: #3730a3;
             transition: width 0.3s ease;
         }
-        .btn-content { position: relative; display: flex; align-items: center; gap: 8px; }
         
-        .btn-row {
-            display: flex;
-            gap: 8px;
-            margin-top: 12px;
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+        .dark ::-webkit-scrollbar-thumb { background: #475569; }
+        
+        /* Dropdown Animation */
+        .dropdown-menu {
+            animation: dropdownIn 0.15s ease-out;
         }
-        .btn-success {
-            flex: 1;
-            padding: 10px;
-            border-radius: 10px;
-            background: #059669;
+        @keyframes dropdownIn {
+            from { opacity: 0; transform: translateY(-8px) scale(0.98); }
+            to { opacity: 1; transform: translateY(0) scale(1); }
+        }
+        
+        /* 16:9 Thumbnail */
+        .thumb-container {
+            position: relative;
+            padding-bottom: 56.25%; /* 16:9 */
+            height: 0;
+            overflow: hidden;
+            border-radius: 12px;
+        }
+        .thumb-container img {
+            position: absolute;
+            top: 0; left: 0;
+            width: 100%; height: 100%;
+            object-fit: cover;
+        }
+        .duration-badge {
+            position: absolute;
+            bottom: 8px;
+            right: 8px;
+            background: rgba(0, 0, 0, 0.8);
             color: white;
-            text-decoration: none;
-            text-align: center;
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 12px;
             font-weight: 600;
-            font-size: 14px;
         }
-        .btn-success:hover { background: #047857; }
-        .btn-secondary {
-            padding: 10px 16px;
-            border-radius: 10px;
-            border: none;
-            background: #f3f4f6;
-            color: #374151;
-            font-weight: 600;
-            font-size: 14px;
-            cursor: pointer;
-        }
-        .btn-secondary:hover { background: #e5e7eb; }
-        .dark .btn-secondary { background: #374151; color: #e5e7eb; }
-        .dark .btn-secondary:hover { background: #4b5563; }
         
-        .theme-btn {
-            position: fixed;
-            top: 16px;
-            right: 16px;
-            padding: 8px;
-            border-radius: 8px;
-            background: white;
-            border: 1px solid #e5e7eb;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-            cursor: pointer;
-            z-index: 50;
+        /* Mobile Optimizations */
+        @media (max-width: 768px) {
+            .split-layout { flex-direction: column !important; }
+            .left-pane { width: 100% !important; }
+            .right-pane { width: 100% !important; }
+            .thumb-container { padding-bottom: 56.25%; }
         }
-        .theme-btn:hover { transform: scale(1.05); }
-        .dark .theme-btn { background: #1f2937; border-color: #374151; }
         
-        @keyframes spin {
-            from { transform: rotate(0deg); }
-            to { transform: rotate(360deg); }
+        /* Touch Targets */
+        @media (pointer: coarse) {
+            .touch-target { min-height: 48px; }
         }
-        .animate-spin { animation: spin 1s linear infinite; }
-        
-        @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.5; }
-        }
-        .animate-pulse { animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
     </style>
 </head>
-<body x-data="athenaApp()" x-init="init()">
+<body x-data="athenaApp()" x-init="init()" 
+      x-bind:class="darkMode ? 'dark bg-gray-900' : 'bg-gray-100 bg-dots'"
+      class="min-h-screen flex items-center justify-center p-4 transition-colors duration-300">
     
-    <button @click="toggleTheme()" class="theme-btn">
-        <svg x-show="!darkMode" width="20" height="20" fill="none" stroke="#4f46e5" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"/></svg>
-        <svg x-show="darkMode" width="20" height="20" fill="none" stroke="#eab308" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"/></svg>
+    <!-- Theme Toggle -->
+    <button @click="toggleTheme()" class="fixed top-4 right-4 z-50 p-3 rounded-xl glass shadow-lg hover:scale-105 transition-transform touch-target">
+        <svg x-show="!darkMode" class="w-5 h-5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"/>
+        </svg>
+        <svg x-show="darkMode" class="w-5 h-5 text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"/>
+        </svg>
     </button>
 
-    <div class="container">
-        <div class="card">
-            <div class="header">
-                <div class="logo">
-                    <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+    <!-- Main Card -->
+    <div class="card-container glass rounded-3xl shadow-2xl overflow-hidden w-full max-w-md" 
+         :class="{ 'max-w-4xl': videoInfo, 'md:max-w-4xl': videoInfo }">
+        
+        <!-- Search Phase -->
+        <div class="p-6 md:p-8">
+            <!-- Header -->
+            <div class="text-center mb-6">
+                <div class="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-gradient-to-br from-indigo-500 to-purple-600 text-white mb-4 shadow-lg">
+                    <svg class="w-7 h-7" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
                 </div>
-                <h1>Athena</h1>
-                <p class="subtitle">Pi Downloader</p>
+                <h1 class="text-2xl font-bold text-gray-900 dark:text-white mb-1">Athena</h1>
+                <p class="text-sm text-gray-500 dark:text-gray-400">YouTube Downloader</p>
             </div>
 
-            <div class="input-wrap">
+            <!-- URL Input -->
+            <div class="relative mb-4">
                 <input 
                     type="url" 
                     x-model="url"
                     @keydown.enter="analyze()"
-                    placeholder="Paste YouTube link..."
+                    placeholder="Paste YouTube URL..."
                     :disabled="loading"
+                    class="w-full pl-4 pr-14 py-4 rounded-xl bg-gray-100/80 dark:bg-gray-800/80 border border-gray-200 dark:border-gray-700 focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none text-gray-800 dark:text-gray-100 text-base touch-target transition-all"
                 >
                 <button 
                     @click="analyze()"
                     :disabled="!url || loading"
-                    class="input-btn"
+                    class="absolute right-2 top-1/2 -translate-y-1/2 p-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed text-white transition-colors"
                 >
-                    <svg x-show="loading" class="animate-spin" width="20" height="20" viewBox="0 0 24 24" fill="none">
-                        <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" opacity="0.25"></circle>
-                        <path fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" opacity="0.75"></path>
+                    <svg x-show="loading" class="animate-spin w-5 h-5" fill="none" viewBox="0 0 24 24">
+                        <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                        <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                     </svg>
-                    <svg x-show="!loading" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M14 5l7 7m0 0l-7 7m7-7H3"/></svg>
+                    <svg x-show="!loading" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M14 5l7 7m0 0l-7 7m7-7H3"/>
+                    </svg>
                 </button>
             </div>
 
-            <div x-show="error" x-transition class="error-box" x-text="error"></div>
+            <!-- Error -->
+            <div x-show="error" x-transition class="mb-4 p-3 rounded-lg bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400 text-sm text-center" x-text="error"></div>
+        </div>
 
-            <div x-show="videoInfo" x-transition style="margin-top: 16px;" x-cloak>
-                <div class="video-info">
-                    <div class="thumb">
-                        <img :src="videoInfo?.thumbnail" alt="">
+        <!-- Video Info & Download Panel -->
+        <div x-show="videoInfo" x-transition:enter="transition ease-out duration-500" x-transition:enter-start="opacity-0" x-transition:enter-end="opacity-100" class="border-t border-gray-200 dark:border-gray-700" x-cloak>
+            <div class="split-layout flex flex-col md:flex-row">
+                
+                <!-- Left Pane: Video Info (40% on desktop) -->
+                <div class="left-pane w-full md:w-[40%] p-6 md:p-8 bg-gray-50/50 dark:bg-gray-900/50">
+                    <!-- 16:9 Thumbnail with Duration -->
+                    <div class="thumb-container mb-4 shadow-lg">
+                        <img :src="videoInfo?.thumbnail" alt="Video thumbnail">
+                        <div class="duration-badge" x-text="videoInfo?.duration || ''"></div>
                     </div>
-                    <div class="video-meta">
-                        <div class="video-title" x-text="videoInfo?.title"></div>
-                        <div class="video-author" x-text="videoInfo?.author"></div>
-                    </div>
+                    
+                    <!-- Video Details -->
+                    <h3 x-text="videoInfo?.title" class="font-bold text-gray-900 dark:text-white text-lg leading-snug mb-2 line-clamp-2"></h3>
+                    <p x-text="videoInfo?.author" class="text-gray-500 dark:text-gray-400 text-sm"></p>
                 </div>
 
-                <div class="select-row">
-                    <div class="dropdown" x-data="{ open: false }" @click.away="open = false">
-                        <input type="hidden" x-model="format">
-                        <button class="dropdown-trigger" :class="{ active: open }" @click="open = !open">
-                            <span x-text="format === 'mp4' ? 'Video (MP4)' : format === 'mp3' ? 'Audio (MP3)' : 'Video (WebM)'"></span>
-                            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
-                        </button>
-                        <div x-show="open" x-transition class="dropdown-menu">
-                            <div class="dropdown-item" :class="{ selected: format === 'mp4' }" @click="format = 'mp4'; open = false">Video (MP4)</div>
-                            <div class="dropdown-item" :class="{ selected: format === 'mp3' }" @click="format = 'mp3'; open = false">Audio (MP3)</div>
-                            <div class="dropdown-item" :class="{ selected: format === 'webm' }" @click="format = 'webm'; open = false">Video (WebM)</div>
+                <!-- Right Pane: Download Settings (60% on desktop) -->
+                <div class="right-pane w-full md:w-[60%] p-6 md:p-8 flex flex-col justify-center">
+                    
+                    <!-- Format & Quality Dropdowns -->
+                    <div class="grid grid-cols-2 gap-4 mb-6">
+                        <!-- Format Dropdown -->
+                        <div class="relative" x-data="{ open: false }" @click.away="open = false">
+                            <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1.5 uppercase tracking-wider">Format</label>
+                            <button @click="open = !open" 
+                                    class="w-full flex items-center justify-between px-4 py-3 rounded-xl bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 hover:border-indigo-400 dark:hover:border-indigo-500 transition-colors text-left touch-target">
+                                <span class="font-medium text-gray-800 dark:text-gray-200" x-text="format === 'mp4' ? 'Video (MP4)' : format === 'mp3' ? 'Audio (MP3)' : 'Video (WebM)'"></span>
+                                <svg class="w-4 h-4 text-gray-400 transition-transform" :class="{ 'rotate-180': open }" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+                                </svg>
+                            </button>
+                            <div x-show="open" class="dropdown-menu absolute z-50 w-full mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl shadow-xl overflow-hidden">
+                                <div @click="format = 'mp4'; open = false" class="px-4 py-3 hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer flex items-center gap-3" :class="{ 'bg-indigo-50 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400': format === 'mp4' }">
+                                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
+                                    <span>Video (MP4)</span>
+                                </div>
+                                <div @click="format = 'mp3'; open = false" class="px-4 py-3 hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer flex items-center gap-3" :class="{ 'bg-indigo-50 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400': format === 'mp3' }">
+                                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3"/></svg>
+                                    <span>Audio (MP3)</span>
+                                </div>
+                                <div @click="format = 'webm'; open = false" class="px-4 py-3 hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer flex items-center gap-3" :class="{ 'bg-indigo-50 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400': format === 'webm' }">
+                                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
+                                    <span>Video (WebM)</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Quality Dropdown -->
+                        <div class="relative" x-data="{ open: false }" @click.away="open = false">
+                            <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1.5 uppercase tracking-wider">Quality</label>
+                            <button @click="open = !open" 
+                                    class="w-full flex items-center justify-between px-4 py-3 rounded-xl bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 hover:border-indigo-400 dark:hover:border-indigo-500 transition-colors text-left touch-target">
+                                <span class="font-medium text-gray-800 dark:text-gray-200" x-text="quality === 'best' ? 'Best Quality' : quality"></span>
+                                <svg class="w-4 h-4 text-gray-400 transition-transform" :class="{ 'rotate-180': open }" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+                                </svg>
+                            </button>
+                            <div x-show="open" class="dropdown-menu absolute z-50 w-full mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl shadow-xl overflow-hidden max-h-60 overflow-y-auto">
+                                <div @click="quality = 'best'; open = false" class="px-4 py-3 hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer" :class="{ 'bg-indigo-50 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400': quality === 'best' }">Best Quality</div>
+                                <template x-for="fmt in videoInfo?.formats || []" :key="fmt.quality">
+                                    <div @click="quality = fmt.quality; open = false" class="px-4 py-3 hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer" :class="{ 'bg-indigo-50 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400': quality === fmt.quality }" x-text="fmt.label"></div>
+                                </template>
+                            </div>
                         </div>
                     </div>
-                    <div class="dropdown" x-data="{ open: false }" @click.away="open = false">
-                        <input type="hidden" x-model="quality">
-                        <button class="dropdown-trigger" :class="{ active: open }" @click="open = !open">
-                            <span x-text="quality === 'best' ? 'Highest' : quality"></span>
-                            <svg fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+
+                    <!-- Download Button with Progress -->
+                    <button 
+                        @click="download()"
+                        :disabled="downloading || completed"
+                        class="relative w-full py-4 rounded-xl font-semibold text-white overflow-hidden touch-target transition-all hover:shadow-lg hover:scale-[1.02] active:scale-[0.98]"
+                        :class="(downloading || completed) ? 'bg-indigo-400 cursor-not-allowed' : 'bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500'"
+                    >
+                        <!-- Progress Fill -->
+                        <div x-show="downloading && !queued" class="progress-fill absolute inset-0 bg-indigo-700/50" :style="`width: ${progress}%`"></div>
+                        <div x-show="queued" class="absolute inset-0 bg-amber-500/50 animate-pulse"></div>
+                        
+                        <!-- Content -->
+                        <span class="relative flex items-center justify-center gap-2">
+                            <svg x-show="downloading" class="animate-spin w-5 h-5" fill="none" viewBox="0 0 24 24">
+                                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                            </svg>
+                            <svg x-show="!downloading && !completed" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+                            </svg>
+                            <svg x-show="completed" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+                            </svg>
+                            <span x-text="downloading ? (queued ? 'Queued...' : `${progress}%`) : (completed ? 'Download Complete!' : 'Download')"></span>
+                        </span>
+                    </button>
+
+                    <!-- Action Buttons -->
+                    <div x-show="completed" x-transition class="flex gap-3 mt-4">
+                        <a :href="downloadUrl" download class="flex-1 py-3 bg-emerald-500 hover:bg-emerald-600 text-white text-center rounded-xl font-semibold transition-colors touch-target flex items-center justify-center gap-2">
+                            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+                            </svg>
+                            Save File
+                        </a>
+                        <button @click="reset()" class="px-6 py-3 rounded-xl bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 font-semibold hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors touch-target">
+                            New
                         </button>
-                        <div x-show="open" x-transition class="dropdown-menu">
-                            <div class="dropdown-item" :class="{ selected: quality === 'best' }" @click="quality = 'best'; open = false">Highest</div>
-                            <template x-for="fmt in videoInfo?.formats || []" :key="fmt.quality">
-                                <div class="dropdown-item" :class="{ selected: quality === fmt.quality }" @click="quality = fmt.quality; open = false" x-text="fmt.label"></div>
-                            </template>
-                        </div>
                     </div>
-                </div>
-
-                <button 
-                    @click="download()"
-                    :disabled="downloading || completed"
-                    class="btn btn-primary"
-                >
-                    <div x-show="downloading && !queued" class="progress-fill" :style="`width: ${progress}%`"></div>
-                    <div x-show="queued" class="progress-fill animate-pulse" style="width: 100%; background: #eab308;"></div>
-                    <span class="btn-content">
-                        <svg x-show="downloading" class="animate-spin" width="16" height="16" viewBox="0 0 24 24" fill="none">
-                            <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" opacity="0.25"></circle>
-                            <path fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" opacity="0.75"></path>
-                        </svg>
-                        <svg x-show="!downloading && !completed" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
-                        <svg x-show="completed" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M5 13l4 4L19 7"/></svg>
-                        <span x-text="downloading ? (queued ? 'Queued...' : `${progress}%`) : (completed ? 'Done!' : 'Download')"></span>
-                    </span>
-                </button>
-
-                <div x-show="completed" x-transition class="btn-row">
-                    <a :href="downloadUrl" download class="btn-success">Save File</a>
-                    <button @click="reset()" class="btn-secondary">New</button>
                 </div>
             </div>
         </div>
@@ -824,13 +653,19 @@ INDEX_HTML = """
 
                 init() {
                     this.darkMode = localStorage.getItem('darkMode') === 'true' || (!('darkMode' in localStorage) && window.matchMedia('(prefers-color-scheme: dark)').matches);
-                    if (this.darkMode) document.body.classList.add('dark');
+                    if (this.darkMode) {
+                        document.documentElement.classList.add('dark');
+                    }
                 },
 
                 toggleTheme() {
                     this.darkMode = !this.darkMode;
                     localStorage.setItem('darkMode', this.darkMode);
-                    document.body.classList.toggle('dark', this.darkMode);
+                    if (this.darkMode) {
+                        document.documentElement.classList.add('dark');
+                    } else {
+                        document.documentElement.classList.remove('dark');
+                    }
                 },
 
                 async analyze() {

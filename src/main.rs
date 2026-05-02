@@ -421,24 +421,7 @@ async fn execute_download(
 
     let ext = if format_type == "mp3" { "mp3" } else { format_type };
     let safe_title = sanitize_filename(title);
-    let file_name = format!("{}.{}", safe_title, ext);
-
-    // Define temp and final paths
-    let temp_file_name = format!("{}.part", file_name);
-    let temp_path = DOWNLOAD_DIR.join(&temp_file_name);
-    let final_path = DOWNLOAD_DIR.join(&file_name);
-
-    // Ensure we don't overwrite existing files
-    let final_path = if final_path.exists() {
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs();
-        let unique_name = format!("{}_{}.{}", safe_title, timestamp, ext);
-        DOWNLOAD_DIR.join(&unique_name)
-    } else {
-        final_path
-    };
+    let _file_name = format!("{}.{}", safe_title, ext);
 
     // Build format string with minimal allocations
     let format_arg = if format_type == "mp3" {
@@ -523,7 +506,6 @@ async fn execute_download(
     // Find the downloaded file by looking for files matching the video title
     // yt-dlp creates: "{title}.{ext}" or "{title}.{ext}.part" during download
     let mut downloaded_file: Option<PathBuf> = None;
-    let base_file_name = format!("{}.{}", safe_title, ext);
     
     // Give yt-dlp a moment to finish writing and rename .part file
     sleep(Duration::from_millis(500)).await;
@@ -574,7 +556,7 @@ async fn execute_download(
     // Update state with exact final path
     let final_file_name = final_path.file_name()
         .and_then(|n| n.to_str())
-        .unwrap_or(&file_name)
+        .unwrap_or(&_file_name)
         .to_string();
         
     {

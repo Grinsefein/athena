@@ -1,0 +1,32 @@
+services:
+  athena:
+    build: .
+    container_name: athena
+    ports:
+      - "8000:8000"
+    environment:
+      - PORT=8000
+      - RUST_LOG=info
+    volumes:
+      # Persist downloads temporarily (optional)
+      - athena-downloads:/tmp/athena-downloads
+    restart: unless-stopped
+    # Resource limits suitable for Pi
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 512M
+        reservations:
+          cpus: '0.5'
+          memory: 128M
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+volumes:
+  athena-downloads:
+    driver: local

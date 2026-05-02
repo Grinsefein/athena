@@ -1,0 +1,10 @@
+target/
+.git/
+.gitignore
+README.md
+*.md
+.dockerignore
+Dockerfile
+docker-compose.yml
+frontend.html
+!frontend.html

@@ -450,18 +450,18 @@ async fn execute_download(
         Cow::Owned(format!("best[height<={}][ext={}]/best[height<={}]/best", height, format_type, height))
     };
 
-    let temp_template_str = temp_path.to_str().ok_or("Invalid temp path")?;
+    let output_template = DOWNLOAD_DIR.join("%(title)s.%(ext)s");
+    let output_template_str = output_template.to_str().ok_or("Invalid output path")?;
 
     // Pre-allocate vec to avoid reallocations
-    let mut args = Vec::with_capacity(14);
+    let mut args = Vec::with_capacity(12);
     args.extend_from_slice(&[
         "--quiet",
         "--no-warnings",
         "--newline",
         "--progress",
-        "--no-part",  // Don't use yt-dlp's internal .part, we manage it ourselves
         "-f", &format_arg,
-        "-o", temp_template_str,
+        "-o", output_template_str,
     ]);
 
     if format_type == "mp3" {
@@ -517,32 +517,73 @@ async fn execute_download(
                 error!("{}", error_msg);
             }
         }
-        // Clean up temp file on failure
-        let _ = fs::remove_file(&temp_path).await;
         return Err(error_msg);
     }
 
-    // Atomic rename: temp file -> final file
-    if temp_path.exists() {
-        fs::rename(&temp_path, &final_path)
-            .await
-            .map_err(|e| format!("Failed to rename temp file: {}", e))?;
-        info!("Atomically renamed {:?} to {:?}", temp_path, final_path);
-    } else {
-        return Err("Downloaded file not found".to_string());
+    // Find the downloaded file by looking for files matching the video title
+    // yt-dlp creates: "{title}.{ext}" or "{title}.{ext}.part" during download
+    let mut downloaded_file: Option<PathBuf> = None;
+    let base_file_name = format!("{}.{}", safe_title, ext);
+    
+    // Give yt-dlp a moment to finish writing and rename .part file
+    sleep(Duration::from_millis(500)).await;
+    
+    match fs::read_dir(&*DOWNLOAD_DIR).await {
+        Ok(mut entries) => {
+            while let Ok(Some(entry)) = entries.next_entry().await {
+                let path = entry.path();
+                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                    // Match files that start with our sanitized title and have the right extension
+                    if name.starts_with(&safe_title) && 
+                       (name.ends_with(&format!(".{}", ext)) || 
+                        name.ends_with(&format!(".{}", ext))) {
+                        // Check file age - should be very recent (created in last minute)
+                        if let Ok(metadata) = entry.metadata().await {
+                            if let Ok(modified) = metadata.modified() {
+                                let age_secs = modified
+                                    .duration_since(SystemTime::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_secs();
+                                let current_secs = SystemTime::now()
+                                    .duration_since(SystemTime::UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_secs();
+                                // File should be less than 5 minutes old
+                                if current_secs.saturating_sub(age_secs) < 300 {
+                                    info!("Found downloaded file: {}", name);
+                                    downloaded_file = Some(path);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Err(e) => warn!("Failed to read download directory: {}", e),
     }
 
+    let final_path = match downloaded_file {
+        Some(path) => path,
+        None => {
+            error!("Could not find downloaded file for title: {}", safe_title);
+            return Err("Downloaded file not found".to_string());
+        }
+    };
+
     // Update state with exact final path
+    let final_file_name = final_path.file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or(&file_name)
+        .to_string();
+        
     {
         let mut downloads = state.active_downloads.lock().await;
         if let Some(info) = downloads.get_mut(download_id) {
             info.status = "completed".to_string();
             info.progress = 100.0;
             info.file_path = Some(final_path.clone());
-            info.file_name = Some(final_path.file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or(&file_name)
-                .to_string());
+            info.file_name = Some(final_file_name);
         }
     }
 

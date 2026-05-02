@@ -1,6 +1,6 @@
 use axum::{
     body::Body,
-    extract::{Path, State},
+    extract::{Path, State, Query},
     http::StatusCode,
     response::{sse::Event, Html, Json, Sse, Response, IntoResponse},
     routing::{get, post},
@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     borrow::Cow,
     collections::HashMap,
+    collections::HashMap as StdHashMap,
     path::PathBuf,
     process::Stdio,
     sync::Arc,
@@ -28,6 +29,16 @@ use tokio::{
 use tower_http::trace::TraceLayer;
 use tracing::{error, info, warn};
 use uuid::Uuid;
+use sha2::{Sha256, Digest};
+
+// Password protection
+static PASSWORD_HASH: Lazy<Option<String>> = Lazy::new(|| {
+    std::env::var("ATHENA_PASSWORD").ok().map(|p| {
+        let mut hasher = Sha256::new();
+        hasher.update(p.as_bytes());
+        hex::encode(hasher.finalize())
+    })
+});
 
 // Static HTML frontend (embedded from Python version)
 static INDEX_HTML: &str = include_str!("../frontend.html");
@@ -62,6 +73,7 @@ type SharedState = Arc<AppState>;
 
 struct AppState {
     active_downloads: Mutex<HashMap<String, DownloadInfo>>,
+    auth_tokens: Mutex<HashMap<String, ()>>, // Simple token store
 }
 
 #[derive(Clone, Debug)]
@@ -134,6 +146,41 @@ struct ProgressUpdate {
     error: Option<String>,
 }
 
+#[derive(Deserialize)]
+struct LoginRequest {
+    password: String,
+}
+
+#[derive(Serialize)]
+struct LoginResponse {
+    token: String,
+}
+
+// Check if request is authenticated (supports header or query param)
+async fn is_authenticated(
+    headers: &axum::http::HeaderMap,
+    query_token: Option<&str>,
+    state: &SharedState,
+) -> bool {
+    if PASSWORD_HASH.is_none() {
+        return true; // No password set, allow all
+    }
+    
+    // Check header first
+    let auth_header = headers.get("authorization")
+        .and_then(|h| h.to_str().ok())
+        .and_then(|h| h.strip_prefix("Bearer "));
+    
+    let token = auth_header.or(query_token);
+    
+    if let Some(token) = token {
+        let tokens = state.auth_tokens.lock().await;
+        tokens.contains_key(token)
+    } else {
+        false
+    }
+}
+
 #[tokio::main]
 async fn main() {
     // Initialize tracing
@@ -164,7 +211,14 @@ async fn main() {
     // Initialize state
     let state = Arc::new(AppState {
         active_downloads: Mutex::new(HashMap::new()),
+        auth_tokens: Mutex::new(HashMap::new()),
     });
+
+    if PASSWORD_HASH.is_some() {
+        info!("Password protection enabled");
+    } else {
+        info!("No password set - running without authentication");
+    }
 
     // Start cleanup task
     let cleanup_state = state.clone();
@@ -180,6 +234,7 @@ async fn main() {
     // Build router
     let app = Router::new()
         .route("/", get(root))
+        .route("/api/login", post(login))
         .route("/api/analyze", post(analyze_video))
         .route("/api/download", post(start_download))
         .route("/api/progress/:download_id", get(progress_stream))
@@ -206,9 +261,59 @@ async fn root() -> Html<&'static str> {
     Html(INDEX_HTML)
 }
 
+async fn login(
+    State(state): State<SharedState>,
+    Json(request): Json<LoginRequest>,
+) -> Json<ApiResponse<LoginResponse>> {
+    if let Some(ref hash) = *PASSWORD_HASH {
+        let mut hasher = Sha256::new();
+        hasher.update(request.password.as_bytes());
+        let input_hash = hex::encode(hasher.finalize());
+        
+        if input_hash == *hash {
+            // Generate token
+            let token = Uuid::new_v4().to_string();
+            {
+                let mut tokens = state.auth_tokens.lock().await;
+                tokens.insert(token.clone(), ());
+            }
+            info!("Login successful, token generated");
+            return Json(ApiResponse {
+                success: true,
+                data: Some(LoginResponse { token }),
+                error: None,
+            });
+        } else {
+            return Json(ApiResponse {
+                success: false,
+                data: None,
+                error: Some("Invalid password".to_string()),
+            });
+        }
+    }
+    
+    // No password set, return success with empty token
+    Json(ApiResponse {
+        success: true,
+        data: Some(LoginResponse { token: String::new() }),
+        error: None,
+    })
+}
+
 async fn analyze_video(
+    State(state): State<SharedState>,
+    headers: axum::http::HeaderMap,
     Json(request): Json<DownloadRequest>,
 ) -> Result<Json<ApiResponse<AnalyzeResponse>>, StatusCode> {
+    // Check authentication
+    if !is_authenticated(&headers, None, &state).await {
+        return Ok(Json(ApiResponse {
+            success: false,
+            data: None,
+            error: Some("Unauthorized".to_string()),
+        }));
+    }
+    
     info!("Analyzing video: {}", request.url);
 
     let output = Command::new("yt-dlp")
@@ -318,7 +423,19 @@ async fn analyze_video(
     }))
 }
 
-async fn trigger_ytdlp_update() -> Json<ApiResponse<serde_json::Value>> {
+async fn trigger_ytdlp_update(
+    State(state): State<SharedState>,
+    headers: axum::http::HeaderMap,
+) -> Json<ApiResponse<serde_json::Value>> {
+    // Check authentication
+    if !is_authenticated(&headers, None, &state).await {
+        return Json(ApiResponse {
+            success: false,
+            data: None,
+            error: Some("Unauthorized".to_string()),
+        });
+    }
+    
     // Run update check internally - no version info exposed
     let update_result = Command::new("yt-dlp")
         .args(["-U"])
@@ -366,8 +483,18 @@ async fn trigger_ytdlp_update() -> Json<ApiResponse<serde_json::Value>> {
 
 async fn start_download(
     State(state): State<SharedState>,
+    headers: axum::http::HeaderMap,
     Json(request): Json<DownloadRequest>,
 ) -> Json<ApiResponse<DownloadResponse>> {
+    // Check authentication
+    if !is_authenticated(&headers, None, &state).await {
+        return Json(ApiResponse {
+            success: false,
+            data: None,
+            error: Some("Unauthorized".to_string()),
+        });
+    }
+    
     let download_id = Uuid::new_v4().to_string()[..8].to_string();
     info!("Starting download {} for URL: {}", download_id, request.url);
 
@@ -606,10 +733,28 @@ async fn execute_download(
 
 async fn progress_stream(
     State(state): State<SharedState>,
+    headers: axum::http::HeaderMap,
     Path(download_id): Path<String>,
+    Query(params): Query<StdHashMap<String, String>>,
 ) -> Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>> {
-    // Create the SSE stream without cloning state
+    let query_token = params.get("token").map(|s| s.as_str());
+    let authenticated = is_authenticated(&headers, query_token, &state).await;
+    
+    // Create the SSE stream
     let stream = async_stream::stream! {
+        // Check authentication first
+        if !authenticated {
+            let error_json = serde_json::to_string(&ProgressUpdate {
+                status: "error".to_string(),
+                progress: 0.0,
+                download_url: None,
+                error: Some("Unauthorized".to_string()),
+            }).unwrap_or_default();
+            yield Ok(Event::default().data(error_json));
+            return;
+        }
+        
+        // Main stream loop
         loop {
             let (status, progress, file_path, error) = {
                 let downloads = state.active_downloads.lock().await;
@@ -661,8 +806,17 @@ async fn progress_stream(
 
 async fn download_file(
     State(state): State<SharedState>,
+    headers: axum::http::HeaderMap,
     Path(download_id): Path<String>,
+    Query(params): Query<StdHashMap<String, String>>,
 ) -> Response {
+    let query_token = params.get("token").map(|s| s.as_str());
+    
+    // Check authentication
+    if !is_authenticated(&headers, query_token, &state).await {
+        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+    }
+    
     let download_info = {
         let downloads = state.active_downloads.lock().await;
         downloads.get(&download_id).cloned()

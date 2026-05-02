@@ -63,6 +63,37 @@
         </div>
     </div>
 
+    <!-- Login Overlay -->
+    <div x-show="!isAuthenticated" x-transition class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/80 backdrop-blur-sm">
+        <div class="w-full max-w-sm glass-card bg-white/80 dark:bg-slate-800/80 rounded-[2rem] shadow-2xl border border-white/50 dark:border-slate-700/50 p-8">
+            <div class="text-center mb-6">
+                <div class="inline-flex items-center justify-center w-12 h-12 rounded-xl bg-gradient-to-tr from-indigo-500 to-purple-500 text-white mb-4 shadow-lg">
+                    <svg class="w-6 h-6" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 3c1.66 0 3 1.34 3 3s-1.34 3-3 3-3-1.34-3-3 1.34-3 3-3zm0 14.2c-2.5 0-4.71-1.28-6-3.22.03-1.99 4-3.08 6-3.08 1.99 0 5.97 1.09 6 3.08-1.29 1.94-3.5 3.22-6 3.22z"/></svg>
+                </div>
+                <h2 class="text-xl font-bold text-gray-800 dark:text-white">Anmeldung erforderlich</h2>
+                <p class="text-sm text-gray-600 dark:text-gray-400 mt-1">Gib das Passwort ein, um fortzufahren</p>
+            </div>
+            <div class="space-y-4">
+                <input 
+                    type="password" 
+                    x-model="password"
+                    @keydown.enter="login()"
+                    placeholder="Passwort..."
+                    class="w-full px-4 py-3 rounded-xl bg-white/50 dark:bg-slate-900/50 border border-gray-200/50 dark:border-slate-700/50 focus:ring-2 focus:ring-indigo-500/50 outline-none text-gray-800 dark:text-white"
+                >
+                <button 
+                    @click="login()"
+                    :disabled="!password || loggingIn"
+                    class="w-full py-3 rounded-xl bg-gradient-to-r from-indigo-500 to-purple-600 text-white font-bold hover:scale-[1.02] active:scale-95 disabled:opacity-50 transition-all"
+                >
+                    <span x-show="!loggingIn">Anmelden</span>
+                    <span x-show="loggingIn">Bitte warten...</span>
+                </button>
+                <div x-show="loginError" x-text="loginError" class="text-center text-sm text-red-500"></div>
+            </div>
+        </div>
+    </div>
+
     <main class="min-h-full flex items-center justify-center p-4 sm:p-8">
         <div class="w-full max-w-lg">
             
@@ -200,7 +231,7 @@
 
                             <!-- Finished State Docs -->
                             <div x-show="completed" x-transition:enter="transition ease-out duration-500 delay-150" x-transition:enter-start="opacity-0 scale-95" x-transition:enter-end="opacity-100 scale-100" class="pt-2 flex flex-col sm:flex-row gap-3" x-cloak>
-                                <a :href="downloadUrl" download class="flex-1 py-3.5 bg-gradient-to-br from-green-400 to-emerald-600 text-white shadow-lg shadow-emerald-500/20 text-center rounded-xl font-bold hover:scale-[1.02] active:scale-95 transition-all outline-none">
+                                <a :href="downloadUrl + (authToken ? (downloadUrl.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(authToken) : '')" download class="flex-1 py-3.5 bg-gradient-to-br from-green-400 to-emerald-600 text-white shadow-lg shadow-emerald-500/20 text-center rounded-xl font-bold hover:scale-[1.02] active:scale-95 transition-all outline-none">
                                     Auf Gerät herunterladen
                                 </a>
                                 <button @click="reset()" class="w-full sm:w-auto sm:flex-none px-6 py-3.5 rounded-xl bg-white/60 dark:bg-slate-900/60 border border-gray-200/50 dark:border-slate-700/50 text-gray-700 dark:text-gray-200 font-bold hover:scale-[1.02] active:scale-95 hover:bg-white dark:hover:bg-slate-800 transition-all outline-none">
@@ -231,6 +262,11 @@
                 downloadId: null,
                 downloadUrl: null,
                 darkMode: false,
+                isAuthenticated: false,
+                authToken: null,
+                password: '',
+                loggingIn: false,
+                loginError: null,
                 eventSource: null,
                 checkingUpdate: false,
                 updateStatus: null,
@@ -238,6 +274,60 @@
                 init() {
                     this.darkMode = localStorage.getItem('darkMode') === 'true' || (!('darkMode' in localStorage) && window.matchMedia('(prefers-color-scheme: dark)').matches);
                     this.updateTheme();
+                    
+                    // Check for stored auth token
+                    const storedToken = localStorage.getItem('athena_token');
+                    if (storedToken) {
+                        this.authToken = storedToken;
+                        this.isAuthenticated = true;
+                    }
+                    
+                    // Check if server requires auth
+                    this.checkAuthRequirement();
+                },
+
+                async checkAuthRequirement() {
+                    try {
+                        const response = await fetch('/api/analyze', {
+                            method: 'POST',
+                            headers: { 
+                                'Content-Type': 'application/json',
+                                ...(this.authToken && { 'Authorization': `Bearer ${this.authToken}` })
+                            },
+                            body: JSON.stringify({ url: 'test' })
+                        });
+                        const data = await response.json();
+                        if (data.error === 'Unauthorized') {
+                            this.isAuthenticated = false;
+                        }
+                    } catch (e) {
+                        // Ignore errors
+                    }
+                },
+
+                async login() {
+                    this.loggingIn = true;
+                    this.loginError = null;
+                    try {
+                        const response = await fetch('/api/login', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ password: this.password })
+                        });
+                        const data = await response.json();
+                        if (data.success && data.data.token) {
+                            this.authToken = data.data.token;
+                            this.isAuthenticated = true;
+                            localStorage.setItem('athena_token', data.data.token);
+                            this.password = '';
+                        } else {
+                            this.loginError = 'Falsches Passwort';
+                        }
+                    } catch (e) {
+                        this.loginError = 'Anmeldung fehlgeschlagen';
+                    } finally {
+                        this.loggingIn = false;
+                    }
                 },
 
                 toggleTheme() {
@@ -279,7 +369,10 @@
                     try {
                         const response = await fetch('/api/analyze', {
                             method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
+                            headers: { 
+                                'Content-Type': 'application/json',
+                                ...(this.authToken && { 'Authorization': `Bearer ${this.authToken}` })
+                            },
                             body: JSON.stringify({ url: cleanUrl, format: this.format })
                         });
 
@@ -305,7 +398,10 @@
                     try {
                         const response = await fetch('/api/download', {
                             method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
+                            headers: { 
+                                'Content-Type': 'application/json',
+                                ...(this.authToken && { 'Authorization': `Bearer ${this.authToken}` })
+                            },
                             body: JSON.stringify({ 
                                 url: cleanUrl, 
                                 format: this.format,
@@ -328,7 +424,8 @@
 
                 connectSSE() {
                     if (this.eventSource) this.eventSource.close();
-                    this.eventSource = new EventSource(`/api/progress/${this.downloadId}`);
+                    const tokenParam = this.authToken ? `?token=${encodeURIComponent(this.authToken)}` : '';
+                    this.eventSource = new EventSource(`/api/progress/${this.downloadId}${tokenParam}`);
                     
                     this.eventSource.onmessage = (event) => {
                         const data = JSON.parse(event.data);
@@ -368,7 +465,12 @@
                     this.checkingUpdate = true;
                     this.updateStatus = null;
                     try {
-                        const response = await fetch('/api/ytdlp-update', { method: 'POST' });
+                        const response = await fetch('/api/ytdlp-update', { 
+                            method: 'POST',
+                            headers: {
+                                ...(this.authToken && { 'Authorization': `Bearer ${this.authToken}` })
+                            }
+                        });
                         const data = await response.json();
                         if (data.success) {
                             if (data.data.status === 'updated') {

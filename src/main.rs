@@ -391,8 +391,44 @@ async fn execute_download(
     format_type: &str,
     quality: &str,
 ) -> Result<(), String> {
-    let output_template = DOWNLOAD_DIR.join("%(title)s.%(ext)s");
-    let template_str = output_template.to_str().ok_or("Invalid path")?;
+    // Get video info first to determine filename
+    let info_output = Command::new("yt-dlp")
+        .args(["--quiet", "--no-warnings", "--dump-json", "--no-download", url])
+        .output()
+        .await
+        .map_err(|e| format!("Failed to get video info: {}", e))?;
+
+    if !info_output.status.success() {
+        return Err("Failed to analyze video".to_string());
+    }
+
+    let video_info: serde_json::Value = serde_json::from_slice(&info_output.stdout)
+        .map_err(|e| format!("Failed to parse video info: {}", e))?;
+
+    let title = video_info.get("title")
+        .and_then(|t| t.as_str())
+        .unwrap_or("download");
+
+    let ext = if format_type == "mp3" { "mp3" } else { format_type };
+    let safe_title = sanitize_filename(title);
+    let file_name = format!("{}.{}", safe_title, ext);
+
+    // Define temp and final paths
+    let temp_file_name = format!("{}.part", file_name);
+    let temp_path = DOWNLOAD_DIR.join(&temp_file_name);
+    let final_path = DOWNLOAD_DIR.join(&file_name);
+
+    // Ensure we don't overwrite existing files
+    let final_path = if final_path.exists() {
+        let timestamp = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs();
+        let unique_name = format!("{}_{}.{}", safe_title, timestamp, ext);
+        DOWNLOAD_DIR.join(&unique_name)
+    } else {
+        final_path
+    };
 
     // Build format string with minimal allocations
     let format_arg = if format_type == "mp3" {
@@ -404,15 +440,18 @@ async fn execute_download(
         Cow::Owned(format!("best[height<={}][ext={}]/best[height<={}]/best", height, format_type, height))
     };
 
+    let temp_template_str = temp_path.to_str().ok_or("Invalid temp path")?;
+
     // Pre-allocate vec to avoid reallocations
-    let mut args = Vec::with_capacity(12);
+    let mut args = Vec::with_capacity(14);
     args.extend_from_slice(&[
         "--quiet",
         "--no-warnings",
         "--newline",
         "--progress",
+        "--no-part",  // Don't use yt-dlp's internal .part, we manage it ourselves
         "-f", &format_arg,
-        "-o", template_str,
+        "-o", temp_template_str,
     ]);
 
     if format_type == "mp3" {
@@ -455,58 +494,36 @@ async fn execute_download(
     let status = child.wait().await.map_err(|e| format!("Failed to wait for process: {}", e))?;
 
     if !status.success() {
+        // Clean up temp file on failure
+        let _ = fs::remove_file(&temp_path).await;
         return Err("yt-dlp process failed".to_string());
     }
 
-    // Get video info to determine filename
-    let info_output = Command::new("yt-dlp")
-        .args(["--quiet", "--no-warnings", "--dump-json", "--no-download", url])
-        .output()
-        .await
-        .map_err(|e| format!("Failed to get video info: {}", e))?;
-
-    let title = if info_output.status.success() {
-        let json_str = String::from_utf8_lossy(&info_output.stdout);
-        serde_json::from_str::<serde_json::Value>(&json_str)
-            .ok()
-            .and_then(|v| v.get("title").and_then(|t| t.as_str()).map(|s| s.to_string()))
-            .unwrap_or_else(|| "download".to_string())
+    // Atomic rename: temp file -> final file
+    if temp_path.exists() {
+        fs::rename(&temp_path, &final_path)
+            .await
+            .map_err(|e| format!("Failed to rename temp file: {}", e))?;
+        info!("Atomically renamed {:?} to {:?}", temp_path, final_path);
     } else {
-        "download".to_string()
-    };
-
-    let ext = if format_type == "mp3" { "mp3" } else { format_type };
-    let file_name = sanitize_filename(&format!("{}.{}", title, ext));
-
-    // Find the actual downloaded file
-    let _base_path = DOWNLOAD_DIR.join(&title);
-    let _pattern = format!("{}*", title);
-    let mut entries = fs::read_dir(&*DOWNLOAD_DIR)
-        .await
-        .map_err(|e| format!("Failed to read download dir: {}", e))?;
-
-    let mut actual_file: Option<PathBuf> = None;
-    while let Ok(Some(entry)) = entries.next_entry().await {
-        let path = entry.path();
-        if let Some(name) = path.file_stem() {
-            if name.to_string_lossy().starts_with(&title) {
-                actual_file = Some(path);
-                break;
-            }
-        }
+        return Err("Downloaded file not found".to_string());
     }
 
+    // Update state with exact final path
     {
         let mut downloads = state.active_downloads.lock().await;
         if let Some(info) = downloads.get_mut(download_id) {
             info.status = "completed".to_string();
             info.progress = 100.0;
-            info.file_path = actual_file.clone();
-            info.file_name = Some(file_name);
+            info.file_path = Some(final_path.clone());
+            info.file_name = Some(final_path.file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(&file_name)
+                .to_string());
         }
     }
 
-    info!("Download {} completed: {:?}", download_id, actual_file);
+    info!("Download {} completed: {:?}", download_id, final_path);
     Ok(())
 }
 
@@ -992,5 +1009,27 @@ mod tests {
     fn test_constants() {
         assert_eq!(MAX_FILE_AGE_HOURS, 1.0);
         assert_eq!(CLEANUP_INTERVAL_SECONDS, 600);
+    }
+
+    #[test]
+    fn test_temp_file_naming() {
+        // Verify .part extension logic
+        let file_name = "video.mp4";
+        let temp_name = format!("{}.part", file_name);
+        assert_eq!(temp_name, "video.mp4.part");
+
+        let file_name = "song.mp3";
+        let temp_name = format!("{}.part", file_name);
+        assert_eq!(temp_name, "song.mp3.part");
+    }
+
+    #[test]
+    fn test_unique_filename_generation() {
+        // Test that we can generate unique filenames with timestamps
+        let safe_title = "my_video";
+        let ext = "mp4";
+        let timestamp = 1234567890u64;
+        let unique_name = format!("{}_{}.{}", safe_title, timestamp, ext);
+        assert_eq!(unique_name, "my_video_1234567890.mp4");
     }
 }

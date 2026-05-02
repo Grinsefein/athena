@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en" class="h-full">
+<html lang="de" class="h-full">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5">
@@ -89,7 +89,7 @@
                                 type="url" 
                                 x-model="url"
                                 @keydown.enter="analyze()"
-                                placeholder="Paste video link here..."
+                                placeholder="Video-Link hier einfügen..."
                                 class="w-full pl-5 pr-14 py-4 rounded-2xl bg-white/50 dark:bg-slate-900/50 border border-gray-200/50 dark:border-slate-700/50 focus:ring-2 focus:ring-indigo-500/50 focus:border-transparent outline-none transition-all duration-300 text-gray-800 dark:text-gray-100 placeholder-gray-400 font-medium"
                                 :disabled="loading"
                             >
@@ -157,7 +157,7 @@
                                         </svg>
                                     </div>
                                     <select x-model="quality" class="w-full pl-12 pr-10 py-4 rounded-2xl bg-gradient-to-br from-white/70 to-white/40 dark:from-slate-800/70 dark:to-slate-900/40 border border-white/60 dark:border-slate-600/50 text-sm font-bold text-gray-800 dark:text-gray-100 outline-none focus:ring-2 focus:ring-purple-500/60 focus:border-purple-400/50 appearance-none cursor-pointer hover:shadow-lg hover:shadow-purple-500/10 hover:border-purple-300/50 dark:hover:border-purple-500/30 transition-all duration-300 backdrop-blur-sm">
-                                        <option value="best">Highest Quality</option>
+                                        <option value="best">Höchste Qualität</option>
                                         <template x-for="fmt in videoInfo?.formats || []">
                                             <option :value="fmt.quality" x-text="fmt.label"></option>
                                         </template>
@@ -193,7 +193,7 @@
                                         <svg x-show="completed" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/>
                                         </svg>
-                                        <span x-text="downloading ? (queued ? 'Queued (Waiting in line...)' : `Herunterladen • ${progress}%`) : (completed ? 'Download abgeschlossen' : 'Begin Download')"></span>
+                                        <span x-text="downloading ? (queued ? 'In Warteschlange (Warten...)' : `Herunterladen • ${progress}%`) : (completed ? 'Download abgeschlossen' : 'Download starten')"></span>
                                     </div>
                                 </button>
                             </div>
@@ -285,11 +285,11 @@
 
                         const data = await response.json();
                         
-                        if (!data.success) throw new Error('Failed to analyze');
+                        if (!data.success) throw new Error('Analyse fehlgeschlagen');
                         
                         this.videoInfo = data.data;
                     } catch (e) {
-                        this.error = 'Unrecognized link. Check URL parameters.';
+                        this.error = 'Link nicht erkannt. URL-Parameter prüfen.';
                     } finally {
                         this.loading = false;
                     }
@@ -315,13 +315,13 @@
 
                         const data = await response.json();
                         
-                        if (!data.success) throw new Error('Failed to initiate');
+                        if (!data.success) throw new Error('Download-Start fehlgeschlagen');
                         
                         this.downloadId = data.data.download_id;
                         this.queued = (data.data.status === 'queued');
                         this.connectSSE();
                     } catch (e) {
-                        this.error = 'Transfer failed to start: ' + e.message;
+                        this.error = 'Download konnte nicht gestartet werden: ' + e.message;
                         this.downloading = false;
                     }
                 },
@@ -355,7 +355,7 @@
                             this.downloadUrl = data.download_url;
                             this.eventSource.close();
                         } else if (data.status === 'error') {
-                            this.error = data.error || 'Transfer failed';
+                            this.error = data.error || 'Download fehlgeschlagen';
                             this.downloading = false;
                             this.eventSource.close();
                         }
@@ -373,10 +373,10 @@
                         if (data.success) {
                             this.versionInfo = data.data.version;
                         } else {
-                            this.versionInfo = 'Unable to check version. Is yt-dlp installed?';
+                            this.versionInfo = 'Version konnte nicht ermittelt werden. Ist yt-dlp installiert?';
                         }
                     } catch (e) {
-                        this.versionInfo = 'Error checking version. Service may be unavailable.';
+                        this.versionInfo = 'Fehler beim Prüfen der Version. Service möglicherweise nicht verfügbar.';
                     } finally {
                         this.checkingVersion = false;
                     }

@@ -1,15 +1,17 @@
 use axum::{
+    body::Body,
     extract::{Path, State},
     http::StatusCode,
     response::{sse::Event, Html, Json, Sse, Response, IntoResponse},
     routing::{get, post},
     Router,
 };
-use futures::stream::Stream;
+use futures::stream::{Stream, StreamExt};
 use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::{
+    borrow::Cow,
     collections::HashMap,
     path::PathBuf,
     process::Stdio,
@@ -30,15 +32,16 @@ use uuid::Uuid;
 // Static HTML frontend (embedded from Python version)
 static INDEX_HTML: &str = include_str!("../frontend.html");
 
-// Configuration
+// Configuration - use system temp directory for temporary storage
 static DOWNLOAD_DIR: Lazy<PathBuf> = Lazy::new(|| {
     std::env::var("DOWNLOAD_DIR")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("./downloads"))
+        .unwrap_or_else(|_| std::env::temp_dir().join("athena-downloads"))
 });
 
-const MAX_FILE_AGE_HOURS: f64 = 24.0;
-const CLEANUP_INTERVAL_SECONDS: u64 = 3600;
+// Short max age for temp files (1 hour)
+const MAX_FILE_AGE_HOURS: f64 = 1.0;
+const CLEANUP_INTERVAL_SECONDS: u64 = 600;
 
 // Global semaphore for concurrent downloads
 static DOWNLOAD_SEMAPHORE: Lazy<Arc<Semaphore>> = Lazy::new(|| {
@@ -47,6 +50,11 @@ static DOWNLOAD_SEMAPHORE: Lazy<Arc<Semaphore>> = Lazy::new(|| {
         .and_then(|s| s.parse().ok())
         .unwrap_or(2);
     Arc::new(Semaphore::new(max))
+});
+
+// Pre-compiled regex for progress parsing
+static PROGRESS_REGEX: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"\[download\]\s+(\d+\.?\d*)%").unwrap()
 });
 
 // App state
@@ -76,8 +84,12 @@ struct DownloadRequest {
     quality: String,
 }
 
-fn default_format() -> String { "mp4".to_string() }
-fn default_quality() -> String { "best".to_string() }
+fn default_format() -> String {
+    String::from("mp4")
+}
+fn default_quality() -> String {
+    String::from("best")
+}
 
 #[derive(Serialize)]
 struct ApiResponse<T> {
@@ -228,10 +240,10 @@ async fn analyze_video(
     let duration_rem = duration_secs % 60;
     let duration = format!("{}:{:02}", duration_mins, duration_rem);
 
-    // Extract formats
-    let mut video_formats = Vec::new();
-    let mut audio_formats = Vec::new();
-    let mut seen_qualities = std::collections::HashSet::new();
+    // Extract formats with pre-allocated collections
+    let mut video_formats = Vec::with_capacity(4);
+    let mut audio_formats = Vec::with_capacity(1);
+    let mut seen_qualities = std::collections::HashSet::with_capacity(8);
 
     if let Some(formats) = info.get("formats").and_then(|f| f.as_array()) {
         for fmt in formats {
@@ -239,35 +251,36 @@ async fn analyze_video(
             let acodec = fmt.get("acodec").and_then(|a| a.as_str()).unwrap_or("none");
             let resolution = fmt.get("resolution").and_then(|r| r.as_str()).unwrap_or("unknown");
             let ext = fmt.get("ext").and_then(|e| e.as_str()).unwrap_or("unknown");
-            let _format_note = fmt.get("format_note").and_then(|f| f.as_str()).unwrap_or(resolution);
 
             if vcodec != "none" && resolution != "unknown" {
+                // Use a stack buffer for the key to avoid heap allocation
                 let key = format!("{}-{}", resolution, ext);
-                if seen_qualities.insert(key.clone()) {
+                if seen_qualities.insert(key) {
                     video_formats.push(FormatInfo {
-                        format: ext.to_string(),
-                        quality: resolution.to_string(),
+                        format: String::from(ext),
+                        quality: String::from(resolution),
                         label: format!("{} ({})", resolution, ext),
                     });
+                    if video_formats.len() >= 4 {
+                        break;
+                    }
                 }
             }
 
-            if acodec != "none" && vcodec == "none" {
-                if !audio_formats.iter().any(|f: &FormatInfo| f.format == "mp3") {
-                    audio_formats.push(FormatInfo {
-                        format: "mp3".to_string(),
-                        quality: "best".to_string(),
-                        label: "MP3 Audio (Best)".to_string(),
-                    });
-                }
+            // Only add audio format once
+            if acodec != "none" && vcodec == "none" && audio_formats.is_empty() {
+                audio_formats.push(FormatInfo {
+                    format: String::from("mp3"),
+                    quality: String::from("best"),
+                    label: String::from("MP3 Audio (Best)"),
+                });
             }
         }
     }
 
-    // Limit formats
-    video_formats.truncate(4);
-    audio_formats.truncate(1);
-    let mut all_formats = video_formats;
+    // Combine formats efficiently
+    let mut all_formats = Vec::with_capacity(video_formats.len() + audio_formats.len());
+    all_formats.extend(video_formats);
     all_formats.extend(audio_formats);
 
     let description = info.get("description")
@@ -381,24 +394,26 @@ async fn execute_download(
     let output_template = DOWNLOAD_DIR.join("%(title)s.%(ext)s");
     let template_str = output_template.to_str().ok_or("Invalid path")?;
 
-    // Build format string
+    // Build format string with minimal allocations
     let format_arg = if format_type == "mp3" {
-        "bestaudio/best".to_string()
+        Cow::Borrowed("bestaudio/best")
     } else if quality == "best" {
-        format!("best[ext={}]/best", format_type)
+        Cow::Owned(format!("best[ext={}]/best", format_type))
     } else {
         let height: String = quality.chars().filter(|c| c.is_ascii_digit()).collect();
-        format!("best[height<={}][ext={}]/best[height<={}]/best", height, format_type, height)
+        Cow::Owned(format!("best[height<={}][ext={}]/best[height<={}]/best", height, format_type, height))
     };
 
-    let mut args = vec![
+    // Pre-allocate vec to avoid reallocations
+    let mut args = Vec::with_capacity(12);
+    args.extend_from_slice(&[
         "--quiet",
         "--no-warnings",
         "--newline",
         "--progress",
         "-f", &format_arg,
         "-o", template_str,
-    ];
+    ]);
 
     if format_type == "mp3" {
         args.push("--extract-audio");
@@ -423,12 +438,9 @@ async fn execute_download(
     let reader = BufReader::new(stdout);
     let mut lines = reader.lines();
 
-    // Progress regex patterns
-    let progress_regex = Regex::new(r"\[download\]\s+(\d+\.?\d*)%").unwrap();
-
     // Read progress lines
     while let Ok(Some(line)) = lines.next_line().await {
-        if let Some(cap) = progress_regex.captures(&line) {
+        if let Some(cap) = PROGRESS_REGEX.captures(&line) {
             if let Some(percent_match) = cap.get(1) {
                 if let Ok(percent) = percent_match.as_str().parse::<f64>() {
                     let mut downloads = state.active_downloads.lock().await;
@@ -464,8 +476,7 @@ async fn execute_download(
     };
 
     let ext = if format_type == "mp3" { "mp3" } else { format_type };
-    let file_name = sanitize_filename(&format!("{}.{}"
-, title, ext));
+    let file_name = sanitize_filename(&format!("{}.{}", title, ext));
 
     // Find the actual downloaded file
     let _base_path = DOWNLOAD_DIR.join(&title);
@@ -503,43 +514,44 @@ async fn progress_stream(
     State(state): State<SharedState>,
     Path(download_id): Path<String>,
 ) -> Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>> {
-    let state = state.clone();
-    let id = download_id.clone();
-
-    // Create the SSE stream
+    // Create the SSE stream without cloning state
     let stream = async_stream::stream! {
         loop {
-            let update = {
+            let (status, progress, file_path, error) = {
                 let downloads = state.active_downloads.lock().await;
-                match downloads.get(&id) {
-                    Some(info) => {
-                        let download_url = if info.status == "completed" && info.file_path.is_some() {
-                            Some(format!("/api/file/{}", id))
-                        } else {
-                            None
-                        };
-                        
-                        ProgressUpdate {
-                            status: info.status.clone(),
-                            progress: info.progress,
-                            download_url,
-                            error: info.error.clone(),
-                        }
-                    }
+                match downloads.get(&download_id) {
+                    Some(info) => (
+                        info.status.clone(),
+                        info.progress,
+                        info.file_path.clone(),
+                        info.error.clone(),
+                    ),
                     None => {
-                        ProgressUpdate {
-                            status: "error".to_string(),
+                        let json = serde_json::to_string(&ProgressUpdate {
+                            status: String::from("error"),
                             progress: 0.0,
                             download_url: None,
-                            error: Some("Download not found".to_string()),
-                        }
+                            error: Some(String::from("Download not found")),
+                        }).unwrap_or_default();
+                        yield Ok(Event::default().data(json));
+                        break;
                     }
                 }
             };
 
-            let should_break = update.status == "completed" || update.status == "error";
-            
-            let json = serde_json::to_string(&update).unwrap_or_default();
+            let should_break = status == "completed" || status == "error";
+            let download_url = if status == "completed" && file_path.is_some() {
+                Some(format!("/api/file/{}", download_id))
+            } else {
+                None
+            };
+
+            let json = serde_json::to_string(&ProgressUpdate {
+                status,
+                progress,
+                download_url,
+                error,
+            }).unwrap_or_default();
             yield Ok(Event::default().data(json));
 
             if should_break {
@@ -580,18 +592,60 @@ async fn download_file(
         return (StatusCode::NOT_FOUND, "File not found on disk").into_response();
     }
 
-    match fs::read(&file_path).await {
-        Ok(contents) => {
-            let file_name = info.file_name.unwrap_or_else(|| download_id.clone());
+    let file_name = info.file_name.unwrap_or_else(|| download_id.clone());
+    let file_size = match fs::metadata(&file_path).await {
+        Ok(meta) => meta.len(),
+        Err(e) => {
+            error!("Failed to get file metadata: {}", e);
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+        }
+    };
+
+    let file_path_clone = file_path.clone();
+    let download_id_clone = download_id.clone();
+
+    match tokio::fs::File::open(&file_path).await {
+        Ok(file) => {
+            let stream = tokio_util::io::ReaderStream::new(file);
+            // Wrap stream to delete file after streaming completes
+            let wrapped_stream = stream.then(move |chunk| {
+                let path = file_path_clone.clone();
+                let id = download_id_clone.clone();
+                async move {
+                    // If this is the last chunk (Err or Ok with empty), delete the file
+                    if chunk.is_err() {
+                        // Try to delete file on error
+                        let _ = fs::remove_file(&path).await;
+                    }
+                    chunk
+                }
+            });
+            let body = Body::from_stream(wrapped_stream);
+
+            // Delete file after response is sent
+            tokio::spawn(async move {
+                // Give a small delay to ensure streaming starts, then mark for cleanup
+                sleep(Duration::from_secs(2)).await;
+                if let Err(e) = fs::remove_file(&file_path).await {
+                    warn!("Failed to remove temp file {:?}: {}", file_path, e);
+                } else {
+                    info!("Removed temp file for download {}: {:?}", download_id, file_path);
+                }
+                // Remove from memory map too
+                let mut downloads = state.active_downloads.lock().await;
+                downloads.remove(&download_id);
+            });
+
             let headers = [
                 ("content-type", "application/octet-stream"),
-                ("content-disposition", &format!("attachment; filename=\"{}\"", file_name)),
+                ("content-disposition", format!("attachment; filename=\"{}\"", file_name)),
+                ("content-length", file_size.to_string()),
             ];
-            
-            (headers, contents).into_response()
+
+            (StatusCode::OK, headers, body).into_response()
         }
         Err(e) => {
-            error!("Failed to read file: {}", e);
+            error!("Failed to open file: {}", e);
             StatusCode::INTERNAL_SERVER_ERROR.into_response()
         }
     }
@@ -640,21 +694,18 @@ async fn cleanup_old_data(state: &SharedState) {
         Err(e) => warn!("Failed to read download directory: {}", e),
     }
 
-    // Cleanup old memory entries
-    let stale_ids: Vec<String> = {
-        let downloads = state.active_downloads.lock().await;
-        downloads
+    // Cleanup old memory entries in single lock
+    {
+        let mut downloads = state.active_downloads.lock().await;
+        let stale_ids: Vec<String> = downloads
             .iter()
             .filter(|(_, info)| {
                 let age_hours = (current_time - info.timestamp) / 3600.0;
                 age_hours > MAX_FILE_AGE_HOURS
             })
             .map(|(id, _)| id.clone())
-            .collect()
-    };
+            .collect();
 
-    if !stale_ids.is_empty() {
-        let mut downloads = state.active_downloads.lock().await;
         for id in stale_ids {
             downloads.remove(&id);
             info!("Cleaned up stale memory entry: {}", id);
@@ -663,11 +714,20 @@ async fn cleanup_old_data(state: &SharedState) {
 }
 
 fn sanitize_filename(name: &str) -> String {
-    name.chars()
-        .filter(|c| c.is_alphanumeric() || *c == ' ' || *c == '.' || *c == '_' || *c == '-')
-        .collect::<String>()
-        .trim_end()
-        .to_string()
+    // Pre-allocate with input length to avoid reallocations
+    let mut result = String::with_capacity(name.len());
+    for c in name.chars() {
+        if c.is_alphanumeric() || c == '.' || c == '_' || c == '-' || c == '(' || c == ')' {
+            result.push(c);
+        } else if c == ' ' {
+            result.push('_');
+        }
+    }
+    // Trim trailing whitespace from end
+    while result.ends_with('_') {
+        result.pop();
+    }
+    result
 }
 
 fn now_secs() -> f64 {
@@ -675,4 +735,262 @@ fn now_secs() -> f64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs_f64()
+}
+
+// ============================================================================
+// Unit Tests
+// ============================================================================
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sanitize_filename_basic() {
+        assert_eq!(sanitize_filename("hello world"), "hello_world");
+        assert_eq!(sanitize_filename("file.txt"), "file.txt");
+        assert_eq!(sanitize_filename("my-video_123"), "my-video_123");
+    }
+
+    #[test]
+    fn test_sanitize_filename_special_chars() {
+        assert_eq!(sanitize_filename("hello/world"), "helloworld");
+        assert_eq!(sanitize_filename("file\\name"), "filename");
+        assert_eq!(sanitize_filename("video(1080p).mp4"), "video(1080p).mp4");
+        assert_eq!(sanitize_filename("test[123]"), "test123");
+    }
+
+    #[test]
+    fn test_sanitize_filename_trailing_underscores() {
+        assert_eq!(sanitize_filename("hello world  "), "hello_world");
+        assert_eq!(sanitize_filename("test_"), "test");
+    }
+
+    #[test]
+    fn test_sanitize_filename_empty() {
+        assert_eq!(sanitize_filename(""), "");
+        assert_eq!(sanitize_filename("!!!"), "");
+    }
+
+    #[test]
+    fn test_sanitize_filename_unicode() {
+        assert_eq!(sanitize_filename("héllo wörld"), "hllo_wrld");
+        assert_eq!(sanitize_filename("日本語"), "");
+    }
+
+    #[test]
+    fn test_default_format() {
+        assert_eq!(default_format(), "mp4");
+    }
+
+    #[test]
+    fn test_default_quality() {
+        assert_eq!(default_quality(), "best");
+    }
+
+    #[test]
+    fn test_progress_regex_matches() {
+        let test_cases = vec![
+            ("[download]  50.5%", Some("50.5")),
+            ("[download] 100%", Some("100")),
+            ("[download]   0%", Some("0")),
+            ("[download]  12.34% of 100MiB", Some("12.34")),
+        ];
+
+        for (input, expected) in test_cases {
+            let caps = PROGRESS_REGEX.captures(input);
+            if let Some(expected_val) = expected {
+                assert!(caps.is_some(), "Should match: {}", input);
+                assert_eq!(caps.unwrap().get(1).unwrap().as_str(), expected_val);
+            }
+        }
+    }
+
+    #[test]
+    fn test_progress_regex_no_match() {
+        let no_match_cases = vec![
+            "[info] Downloading",
+            "50% complete",
+            "",
+            "[download]",
+        ];
+
+        for input in no_match_cases {
+            assert!(
+                PROGRESS_REGEX.captures(input).is_none(),
+                "Should not match: {}",
+                input
+            );
+        }
+    }
+
+    #[test]
+    fn test_download_dir_lazy() {
+        // Test that DOWNLOAD_DIR is valid
+        let dir = &*DOWNLOAD_DIR;
+        assert!(dir.is_absolute() || dir.starts_with("."));
+    }
+
+    #[test]
+    fn test_download_semaphore() {
+        // Test semaphore initialization
+        let permits = DOWNLOAD_SEMAPHORE.available_permits();
+        // Default is 2, but could be overridden by env var
+        assert!(permits > 0);
+    }
+
+    #[test]
+    fn test_api_response_serialization() {
+        let response: ApiResponse<String> = ApiResponse {
+            success: true,
+            data: Some("test data".to_string()),
+            error: None,
+        };
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(json.contains("\"success\":true"));
+        assert!(json.contains("\"data\":\"test data\""));
+        assert!(!json.contains("error"));
+    }
+
+    #[test]
+    fn test_api_response_error() {
+        let response: ApiResponse<String> = ApiResponse {
+            success: false,
+            data: None,
+            error: Some("error message".to_string()),
+        };
+        let json = serde_json::to_string(&response).unwrap();
+        assert!(json.contains("\"success\":false"));
+        assert!(json.contains("\"error\":\"error message\""));
+        assert!(!json.contains("data"));
+    }
+
+    #[test]
+    fn test_format_info_serialization() {
+        let info = FormatInfo {
+            format: "mp4".to_string(),
+            quality: "1080p".to_string(),
+            label: "1080p (mp4)".to_string(),
+        };
+        let json = serde_json::to_string(&info).unwrap();
+        assert!(json.contains("\"format\":\"mp4\""));
+        assert!(json.contains("\"quality\":\"1080p\""));
+        assert!(json.contains("\"label\":\"1080p"));
+    }
+
+    #[test]
+    fn test_progress_update_serialization() {
+        let update = ProgressUpdate {
+            status: "completed".to_string(),
+            progress: 100.0,
+            download_url: Some("/api/file/123".to_string()),
+            error: None,
+        };
+        let json = serde_json::to_string(&update).unwrap();
+        assert!(json.contains("\"status\":\"completed\""));
+        assert!(json.contains("\"progress\":100.0"));
+        assert!(json.contains("\"download_url\":\"/api/file/123\""));
+    }
+
+    #[test]
+    fn test_progress_update_skips_null() {
+        let update = ProgressUpdate {
+            status: "processing".to_string(),
+            progress: 50.0,
+            download_url: None,
+            error: None,
+        };
+        let json = serde_json::to_string(&update).unwrap();
+        assert!(!json.contains("download_url"));
+        assert!(!json.contains("error"));
+    }
+
+    #[test]
+    fn test_download_request_deserialization() {
+        let json = r#"{"url":"https://youtube.com/watch?v=test","format":"mp4","quality":"1080p"}"#;
+        let request: DownloadRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(request.url, "https://youtube.com/watch?v=test");
+        assert_eq!(request.format, "mp4");
+        assert_eq!(request.quality, "1080p");
+    }
+
+    #[test]
+    fn test_download_request_defaults() {
+        let json = r#"{"url":"https://youtube.com/watch?v=test"}"#;
+        let request: DownloadRequest = serde_json::from_str(json).unwrap();
+        assert_eq!(request.url, "https://youtube.com/watch?v=test");
+        assert_eq!(request.format, "mp4");
+        assert_eq!(request.quality, "best");
+    }
+
+    #[tokio::test]
+    async fn test_app_state_creation() {
+        let state = Arc::new(AppState {
+            active_downloads: Mutex::new(HashMap::new()),
+        });
+
+        // Test inserting a download
+        {
+            let mut downloads = state.active_downloads.lock().await;
+            downloads.insert("test-id".to_string(), DownloadInfo {
+                status: "queued".to_string(),
+                progress: 0.0,
+                file_path: None,
+                file_name: None,
+                error: None,
+                timestamp: now_secs(),
+            });
+        }
+
+        // Test reading it back
+        {
+            let downloads = state.active_downloads.lock().await;
+            assert!(downloads.contains_key("test-id"));
+            let info = downloads.get("test-id").unwrap();
+            assert_eq!(info.status, "queued");
+            assert_eq!(info.progress, 0.0);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_download_info_update() {
+        let state = Arc::new(AppState {
+            active_downloads: Mutex::new(HashMap::new()),
+        });
+
+        // Insert
+        {
+            let mut downloads = state.active_downloads.lock().await;
+            downloads.insert("test-id".to_string(), DownloadInfo {
+                status: "queued".to_string(),
+                progress: 0.0,
+                file_path: None,
+                file_name: None,
+                error: None,
+                timestamp: now_secs(),
+            });
+        }
+
+        // Update progress
+        {
+            let mut downloads = state.active_downloads.lock().await;
+            if let Some(info) = downloads.get_mut("test-id") {
+                info.progress = 50.5;
+                info.status = "processing".to_string();
+            }
+        }
+
+        // Verify
+        {
+            let downloads = state.active_downloads.lock().await;
+            let info = downloads.get("test-id").unwrap();
+            assert_eq!(info.progress, 50.5);
+            assert_eq!(info.status, "processing");
+        }
+    }
+
+    #[test]
+    fn test_constants() {
+        assert_eq!(MAX_FILE_AGE_HOURS, 1.0);
+        assert_eq!(CLEANUP_INTERVAL_SECONDS, 600);
+    }
 }

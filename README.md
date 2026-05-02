@@ -1,36 +1,53 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Athena Pi
 
-## Getting Started
+A unified Rust-based video downloader with embedded Alpine.js frontend. Downloads are stored temporarily and auto-deleted.
 
-First, run the development server:
+## Features
+
+- **Unified Stack**: Pure Rust backend + embedded HTML/JS frontend (no separate frontend server)
+- **Temporary Storage**: Downloads saved to system temp directory, auto-deleted after serving
+- YouTube video/audio downloading via yt-dlp
+- Real-time progress tracking with Server-Sent Events (SSE)
+- Concurrent download limiting with semaphore
+- Memory-efficient streaming downloads
+- Dark mode UI
+
+## Requirements
+
+- Rust 1.70+
+- yt-dlp installed on system
+- ffmpeg (for audio extraction)
+
+## Development
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+# Build
+cargo build --release
+
+# Run
+cargo run
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Server listens on `0.0.0.0:8000` by default.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Configuration
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+Environment variables:
+- `PORT` - Server port (default: 8000)
+- `DOWNLOAD_DIR` - Override temp directory (default: system temp dir)
+- `MAX_CONCURRENT_DOWNLOADS` - Max parallel downloads (default: 2)
 
-## Learn More
+## Storage Behavior
 
-To learn more about Next.js, take a look at the following resources:
+Files are stored temporarily:
+- Default location: System temp directory (`/tmp/athena-downloads` on Linux)
+- Files deleted automatically after download completes
+- Cleanup runs every 10 minutes for orphaned files
+- Max file age: 1 hour
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## API Endpoints
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- `POST /api/analyze` - Analyze video URL
+- `POST /api/download` - Start download
+- `GET /api/progress/:id` - SSE progress stream
+- `GET /api/file/:id` - Download file (auto-deleted after)

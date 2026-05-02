@@ -185,16 +185,34 @@
                     }
                 },
 
+                cleanUrl(url) {
+                    // Remove playlist and other extra parameters from YouTube URLs
+                    try {
+                        const urlObj = new URL(url);
+                        // Keep only the 'v' parameter for YouTube
+                        const videoId = urlObj.searchParams.get('v');
+                        if (videoId && (urlObj.hostname.includes('youtube.com') || urlObj.hostname.includes('youtu.be'))) {
+                            return `https://www.youtube.com/watch?v=${videoId}`;
+                        }
+                    } catch (e) {
+                        // If URL parsing fails, return original
+                    }
+                    return url;
+                },
+
                 async analyze() {
                     if (!this.url) return;
                     this.loading = true;
                     this.error = null;
 
+                    // Clean URL before sending
+                    const cleanUrl = this.cleanUrl(this.url);
+
                     try {
                         const response = await fetch('/api/analyze', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ url: this.url, format: this.format })
+                            body: JSON.stringify({ url: cleanUrl, format: this.format })
                         });
 
                         const data = await response.json();
@@ -213,12 +231,15 @@
                     this.downloading = true;
                     this.error = null;
 
+                    // Use cleaned URL for download too
+                    const cleanUrl = this.cleanUrl(this.url);
+
                     try {
                         const response = await fetch('/api/download', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({ 
-                                url: this.url, 
+                                url: cleanUrl, 
                                 format: this.format,
                                 quality: this.quality 
                             })

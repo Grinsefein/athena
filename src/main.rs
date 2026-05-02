@@ -627,7 +627,7 @@ async fn download_file(
             // Wrap stream to delete file after streaming completes
             let wrapped_stream = stream.then(move |chunk| {
                 let path = file_path_clone.clone();
-                let id = download_id_clone.clone();
+                let _id = download_id_clone.clone();
                 async move {
                     // If this is the last chunk (Err or Ok with empty), delete the file
                     if chunk.is_err() {
@@ -638,6 +638,13 @@ async fn download_file(
                 }
             });
             let body = Body::from_stream(wrapped_stream);
+
+            // Build response with proper header handling
+            let mut response = (StatusCode::OK, body).into_response();
+            let headers = response.headers_mut();
+            headers.insert("content-type", "application/octet-stream".parse().unwrap());
+            headers.insert("content-disposition", format!("attachment; filename=\"{}\"", file_name).parse().unwrap());
+            headers.insert("content-length", file_size.to_string().parse().unwrap());
 
             // Delete file after response is sent
             tokio::spawn(async move {
@@ -653,13 +660,7 @@ async fn download_file(
                 downloads.remove(&download_id);
             });
 
-            let headers = [
-                ("content-type", "application/octet-stream"),
-                ("content-disposition", format!("attachment; filename=\"{}\"", file_name)),
-                ("content-length", file_size.to_string()),
-            ];
-
-            (StatusCode::OK, headers, body).into_response()
+            response
         }
         Err(e) => {
             error!("Failed to open file: {}", e);
@@ -790,8 +791,11 @@ mod tests {
 
     #[test]
     fn test_sanitize_filename_unicode() {
-        assert_eq!(sanitize_filename("héllo wörld"), "hllo_wrld");
-        assert_eq!(sanitize_filename("日本語"), "");
+        // Unicode letters are kept (é, ö, and CJK are alphanumeric)
+        assert_eq!(sanitize_filename("héllo wörld"), "héllo_wörld");
+        assert_eq!(sanitize_filename("日本語"), "日本語");
+        // Symbols and emoji are filtered out
+        assert_eq!(sanitize_filename("hello🎉world"), "helloworld");
     }
 
     #[test]

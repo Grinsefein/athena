@@ -1,4 +1,5 @@
 # Multi-stage build for minimal final image
+# Using official Rust image which supports ARM64 (for Raspberry Pi)
 FROM rust:1.75-slim-bookworm AS builder
 
 WORKDIR /app
@@ -7,6 +8,7 @@ WORKDIR /app
 RUN apt-get update && apt-get install -y \
     pkg-config \
     libssl-dev \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy manifest files first for better layer caching

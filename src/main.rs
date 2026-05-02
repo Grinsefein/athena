@@ -20,7 +20,7 @@ use std::{
 };
 use tokio::{
     fs,
-    io::{AsyncBufReadExt, BufReader},
+    io::{AsyncBufReadExt, AsyncReadExt, BufReader},
     process::Command,
     sync::{Mutex, Semaphore},
     time::{interval, sleep},
@@ -156,6 +156,11 @@ async fn main() {
     info!("Download directory: {:?}", *DOWNLOAD_DIR);
     info!("Max concurrent downloads: {}", DOWNLOAD_SEMAPHORE.available_permits());
 
+    // Check yt-dlp version and update if needed
+    tokio::spawn(async {
+        update_yt_dlp().await;
+    });
+
     // Initialize state
     let state = Arc::new(AppState {
         active_downloads: Mutex::new(HashMap::new()),
@@ -165,6 +170,11 @@ async fn main() {
     let cleanup_state = state.clone();
     tokio::spawn(async move {
         periodic_cleanup(cleanup_state).await;
+    });
+
+    // Start yt-dlp auto-update task (checks every 24 hours)
+    tokio::spawn(async {
+        periodic_yt_dlp_update().await;
     });
 
     // Build router
@@ -491,12 +501,25 @@ async fn execute_download(
         }
     }
 
+    // Also capture stderr for error reporting
+    let stderr = child.stderr.take();
+    
     let status = child.wait().await.map_err(|e| format!("Failed to wait for process: {}", e))?;
 
     if !status.success() {
+        // Read stderr to get actual error message
+        let mut error_msg = "yt-dlp process failed".to_string();
+        if let Some(stderr) = stderr {
+            let mut reader = BufReader::new(stderr);
+            let mut buffer = String::new();
+            if reader.read_to_string(&mut buffer).await.is_ok() && !buffer.is_empty() {
+                error_msg = format!("yt-dlp error: {}", buffer.trim());
+                error!("{}", error_msg);
+            }
+        }
         // Clean up temp file on failure
         let _ = fs::remove_file(&temp_path).await;
-        return Err("yt-dlp process failed".to_string());
+        return Err(error_msg);
     }
 
     // Atomic rename: temp file -> final file
@@ -746,6 +769,47 @@ fn sanitize_filename(name: &str) -> String {
         result.pop();
     }
     result
+}
+
+/// Check and update yt-dlp to the latest version
+async fn update_yt_dlp() {
+    info!("Checking for yt-dlp updates...");
+    
+    let output = Command::new("yt-dlp")
+        .args(["-U"])
+        .output()
+        .await;
+    
+    match output {
+        Ok(result) => {
+            let stdout = String::from_utf8_lossy(&result.stdout);
+            let stderr = String::from_utf8_lossy(&result.stderr);
+            
+            if result.status.success() {
+                if stdout.contains("up to date") {
+                    info!("yt-dlp is already up to date");
+                } else {
+                    info!("yt-dlp updated successfully: {}", stdout.trim());
+                }
+            } else {
+                warn!("yt-dlp update check failed: {} {}", stdout, stderr);
+            }
+        }
+        Err(e) => {
+            warn!("Failed to run yt-dlp -U: {}", e);
+        }
+    }
+}
+
+/// Periodically check for yt-dlp updates (every 24 hours)
+async fn periodic_yt_dlp_update() {
+    let mut interval = interval(Duration::from_secs(24 * 60 * 60)); // 24 hours
+    
+    loop {
+        interval.tick().await;
+        info!("Running periodic yt-dlp update check...");
+        update_yt_dlp().await;
+    }
 }
 
 fn now_secs() -> f64 {

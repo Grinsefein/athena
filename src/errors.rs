@@ -53,6 +53,10 @@ pub enum AppError {
     #[error("Invalid format or quality: {message}")]
     InvalidFormat { message: String },
 
+    /// Error when request is not authenticated
+    #[error("Unauthorized: {message}")]
+    Unauthorized { message: String },
+
     /// Generic internal server error (fallback)
     #[error("Internal server error: {message}")]
     Internal { message: String },
@@ -71,6 +75,7 @@ impl AppError {
     /// Get the HTTP status code associated with this error
     pub fn status_code(&self) -> StatusCode {
         match self {
+            AppError::Unauthorized { .. } => StatusCode::UNAUTHORIZED,
             AppError::ExternalCommand { .. } => StatusCode::BAD_GATEWAY,
             AppError::ParseVideoInfo { .. } => StatusCode::BAD_GATEWAY,
             AppError::DownloadNotFound { .. } => StatusCode::NOT_FOUND,
@@ -89,6 +94,7 @@ impl AppError {
     /// Get an error code string for programmatic error handling
     pub fn error_code(&self) -> &'static str {
         match self {
+            AppError::Unauthorized { .. } => "UNAUTHORIZED",
             AppError::ExternalCommand { .. } => "EXTERNAL_COMMAND_ERROR",
             AppError::ParseVideoInfo { .. } => "PARSE_ERROR",
             AppError::DownloadNotFound { .. } => "DOWNLOAD_NOT_FOUND",

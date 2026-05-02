@@ -48,7 +48,7 @@
     </div>
 
     <!-- Update Check Result Toast -->
-    <div x-show="updateStatus" x-transition:enter="transition ease-out duration-300" x-transition:enter-start="opacity-0 translate-y-4" x-transition:enter-end="opacity-100 translate-y-0" x-transition:leave="transition ease-in duration-200" x-transition:leave-start="opacity-100" x-transition:leave-end="opacity-0" class="fixed top-20 right-4 z-50 p-4 rounded-xl glass-card bg-white/80 dark:bg-slate-800/80 border border-white/50 dark:border-slate-700/50 shadow-xl max-w-xs" x-cloak>
+    <div x-show="updateStatus" x-transition:enter="transition ease-out duration-300" x-transition:enter-start="opacity-0 translate-y-4" x-transition:enter-end="opacity-100 translate-y-0" x-transition:leave="transition ease-in duration-200" x-transition:leave-start="opacity-100" x-transition:leave-end="opacity-0" class="fixed top-20 right-4 left-4 sm:left-auto z-50 p-4 rounded-xl glass-card bg-white/80 dark:bg-slate-800/80 border border-white/50 dark:border-slate-700/50 shadow-xl sm:max-w-xs" x-cloak>
         <div class="flex items-start gap-3">
             <svg class="w-5 h-5 text-emerald-500 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
@@ -109,7 +109,7 @@
                         </div>
 
                         <!-- Error Toast -->
-                        <div x-show="error" x-transition class="text-center text-sm font-bold text-red-500 bg-red-500/10 py-3 px-4 rounded-xl border border-red-500/20" x-text="error"></div>
+                        <div x-show="error" x-transition class="text-center text-xs sm:text-sm font-bold text-red-500 bg-red-500/10 py-3 px-4 rounded-xl border border-red-500/20 break-words" x-text="error"></div>
 
                         <!-- Video Info & Options -->
                         <div x-show="videoInfo" x-transition:enter="transition ease-out duration-500 delay-100" x-transition:enter-start="opacity-0 translate-y-4" x-transition:enter-end="opacity-100 translate-y-0" class="space-y-4 mt-6" x-cloak>
@@ -126,7 +126,7 @@
                             </div>
 
                             <!-- Options Grid -->
-                            <div class="grid grid-cols-2 gap-3">
+                            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                                 <!-- Format Selector -->
                                 <div class="relative group">
                                     <div class="absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none transition-transform duration-300 group-hover:scale-110">
@@ -157,7 +157,7 @@
                                         </svg>
                                     </div>
                                     <select x-model="quality" class="w-full pl-12 pr-10 py-4 rounded-2xl bg-gradient-to-br from-white/70 to-white/40 dark:from-slate-800/70 dark:to-slate-900/40 border border-white/60 dark:border-slate-600/50 text-sm font-bold text-gray-800 dark:text-gray-100 outline-none focus:ring-2 focus:ring-purple-500/60 focus:border-purple-400/50 appearance-none cursor-pointer hover:shadow-lg hover:shadow-purple-500/10 hover:border-purple-300/50 dark:hover:border-purple-500/30 transition-all duration-300 backdrop-blur-sm">
-                                        <option value="best">Höchste Qualität</option>
+                                        <option value="best">Beste Qualität</option>
                                         <template x-for="fmt in videoInfo?.formats || []">
                                             <option :value="fmt.quality" x-text="fmt.label"></option>
                                         </template>
@@ -199,11 +199,11 @@
                             </div>
 
                             <!-- Finished State Docs -->
-                            <div x-show="completed" x-transition:enter="transition ease-out duration-500 delay-150" x-transition:enter-start="opacity-0 scale-95" x-transition:enter-end="opacity-100 scale-100" class="pt-2 flex gap-3" x-cloak>
+                            <div x-show="completed" x-transition:enter="transition ease-out duration-500 delay-150" x-transition:enter-start="opacity-0 scale-95" x-transition:enter-end="opacity-100 scale-100" class="pt-2 flex flex-col sm:flex-row gap-3" x-cloak>
                                 <a :href="downloadUrl" download class="flex-1 py-3.5 bg-gradient-to-br from-green-400 to-emerald-600 text-white shadow-lg shadow-emerald-500/20 text-center rounded-xl font-bold hover:scale-[1.02] active:scale-95 transition-all outline-none">
                                     Auf Gerät herunterladen
                                 </a>
-                                <button @click="reset()" class="flex-none px-6 py-3.5 rounded-xl bg-white/60 dark:bg-slate-900/60 border border-gray-200/50 dark:border-slate-700/50 text-gray-700 dark:text-gray-200 font-bold hover:scale-[1.02] active:scale-95 hover:bg-white dark:hover:bg-slate-800 transition-all outline-none">
+                                <button @click="reset()" class="w-full sm:w-auto sm:flex-none px-6 py-3.5 rounded-xl bg-white/60 dark:bg-slate-900/60 border border-gray-200/50 dark:border-slate-700/50 text-gray-700 dark:text-gray-200 font-bold hover:scale-[1.02] active:scale-95 hover:bg-white dark:hover:bg-slate-800 transition-all outline-none">
                                     Nächstes Video
                                 </button>
                             </div>

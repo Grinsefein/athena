@@ -168,6 +168,11 @@ struct LoginResponse {
     token: String,
 }
 
+#[derive(Serialize)]
+struct ConfigResponse {
+    auth_enabled: bool,
+}
+
 // Check if request is authenticated (supports header or query param)
 async fn is_authenticated(
     headers: &axum::http::HeaderMap,
@@ -191,6 +196,16 @@ async fn is_authenticated(
     } else {
         false
     }
+}
+
+async fn get_config() -> Json<ApiResponse<ConfigResponse>> {
+    Json(ApiResponse {
+        success: true,
+        data: Some(ConfigResponse {
+            auth_enabled: PASSWORD_HASH.is_some(),
+        }),
+        error: None,
+    })
 }
 
 #[tokio::main]
@@ -249,6 +264,7 @@ async fn main() {
     // Build router
     let app = Router::new()
         .route("/", get(root))
+        .route("/api/config", get(get_config))
         .route("/api/login", post(login))
         .route("/api/analyze", post(analyze_video))
         .route("/api/download", post(start_download))

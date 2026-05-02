@@ -184,6 +184,7 @@ async fn main() {
         .route("/api/download", post(start_download))
         .route("/api/progress/:download_id", get(progress_stream))
         .route("/api/file/:download_id", get(download_file))
+        .route("/api/ytdlp-version", get(get_ytdlp_version))
         .layer(TraceLayer::new_for_http())
         .with_state(state);
 
@@ -317,6 +318,29 @@ async fn analyze_video(
     }))
 }
 
+async fn get_ytdlp_version() -> Json<ApiResponse<serde_json::Value>> {
+    let output = Command::new("yt-dlp")
+        .args(["--version"])
+        .output()
+        .await;
+
+    match output {
+        Ok(result) if result.status.success() => {
+            let version = String::from_utf8_lossy(&result.stdout).trim().to_string();
+            Json(ApiResponse {
+                success: true,
+                data: Some(serde_json::json!({ "version": version })),
+                error: None,
+            })
+        }
+        _ => Json(ApiResponse {
+            success: false,
+            data: None,
+            error: Some("Could not determine yt-dlp version".to_string()),
+        }),
+    }
+}
+
 async fn start_download(
     State(state): State<SharedState>,
     Json(request): Json<DownloadRequest>,
@@ -420,8 +444,7 @@ async fn execute_download(
         .unwrap_or("download");
 
     let ext = if format_type == "mp3" { "mp3" } else { format_type };
-    let safe_title = sanitize_filename(title);
-    let _file_name = format!("{}.{}", safe_title, ext);
+    let _file_name = format!("{}.{}", sanitize_filename(title), ext);
 
     // Build format string with minimal allocations
     let format_arg = if format_type == "mp3" {
@@ -433,7 +456,9 @@ async fn execute_download(
         Cow::Owned(format!("best[height<={}][ext={}]/best[height<={}]/best", height, format_type, height))
     };
 
-    let output_template = DOWNLOAD_DIR.join("%(title)s.%(ext)s");
+    // Use download_id in output template to reliably find the file later
+    // yt-dlp will create: {title}-{id}.{ext} which we can match by the unique ID
+    let output_template = DOWNLOAD_DIR.join(format!("%(title)s-[{}].%(ext)s", download_id));
     let output_template_str = output_template.to_str().ok_or("Invalid output path")?;
 
     // Pre-allocate vec to avoid reallocations
@@ -503,9 +528,10 @@ async fn execute_download(
         return Err(error_msg);
     }
 
-    // Find the downloaded file by looking for files matching the video title
-    // yt-dlp creates: "{title}.{ext}" or "{title}.{ext}.part" during download
+    // Find the downloaded file by looking for files containing the download_id
+    // yt-dlp creates: "{title}-[{download_id}].{ext}" based on our output template
     let mut downloaded_file: Option<PathBuf> = None;
+    let id_marker = format!("[{}]", download_id);
     
     // Give yt-dlp a moment to finish writing and rename .part file
     sleep(Duration::from_millis(500)).await;
@@ -515,29 +541,11 @@ async fn execute_download(
             while let Ok(Some(entry)) = entries.next_entry().await {
                 let path = entry.path();
                 if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                    // Match files that start with our sanitized title and have the right extension
-                    if name.starts_with(&safe_title) && 
-                       (name.ends_with(&format!(".{}", ext)) || 
-                        name.ends_with(&format!(".{}", ext))) {
-                        // Check file age - should be very recent (created in last minute)
-                        if let Ok(metadata) = entry.metadata().await {
-                            if let Ok(modified) = metadata.modified() {
-                                let age_secs = modified
-                                    .duration_since(SystemTime::UNIX_EPOCH)
-                                    .unwrap_or_default()
-                                    .as_secs();
-                                let current_secs = SystemTime::now()
-                                    .duration_since(SystemTime::UNIX_EPOCH)
-                                    .unwrap_or_default()
-                                    .as_secs();
-                                // File should be less than 5 minutes old
-                                if current_secs.saturating_sub(age_secs) < 300 {
-                                    info!("Found downloaded file: {}", name);
-                                    downloaded_file = Some(path);
-                                    break;
-                                }
-                            }
-                        }
+                    // Match files containing our unique download_id marker and having the right extension
+                    if name.contains(&id_marker) && name.ends_with(&format!(".{}", ext)) {
+                        info!("Found downloaded file: {}", name);
+                        downloaded_file = Some(path);
+                        break;
                     }
                 }
             }
@@ -548,7 +556,7 @@ async fn execute_download(
     let final_path = match downloaded_file {
         Some(path) => path,
         None => {
-            error!("Could not find downloaded file for title: {}", safe_title);
+            error!("Could not find downloaded file with ID marker: {}", id_marker);
             return Err("Downloaded file not found".to_string());
         }
     };
@@ -655,7 +663,14 @@ async fn download_file(
         return (StatusCode::NOT_FOUND, "File not found on disk").into_response();
     }
 
-    let file_name = info.file_name.unwrap_or_else(|| download_id.clone());
+    let file_name = info.file_name
+        .map(|name| {
+            // Remove the ID marker from the filename for a cleaner display
+            // Convert "Title-[id].mp4" to "Title.mp4"
+            let id_marker = format!("-[{}].", download_id);
+            name.replace(&id_marker, ".")
+        })
+        .unwrap_or_else(|| download_id.clone());
     let file_size = match fs::metadata(&file_path).await {
         Ok(meta) => meta.len(),
         Err(e) => {

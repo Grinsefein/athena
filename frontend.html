@@ -20,11 +20,40 @@
 <body class="h-full bg-animated bg-gradient-to-br from-indigo-50 via-purple-50 to-pink-50 dark:from-slate-900 dark:via-purple-900/20 dark:to-slate-900"
       x-data="athenaApp()" x-init="init()">
     
-    <!-- Theme Toggle -->
-    <button @click="toggleTheme()" class="fixed top-4 right-4 z-50 p-3.5 rounded-2xl glass-card bg-white/40 dark:bg-black/30 border border-white/40 dark:border-white/10 shadow-xl hover:scale-110 active:scale-95 transition-all duration-300">
-        <svg x-show="!darkMode" class="w-5 h-5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"/></svg>
-        <svg x-show="darkMode" class="w-5 h-5 text-yellow-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"/></svg>
-    </button>
+    <!-- Top Right Controls -->
+    <div class="fixed top-4 right-4 z-50 flex items-center gap-2">
+        <!-- yt-dlp Version Check -->
+        <button @click="checkYtdlpVersion()" :disabled="checkingVersion" class="p-3.5 rounded-2xl glass-card bg-white/40 dark:bg-black/30 border border-white/40 dark:border-white/10 shadow-xl hover:scale-110 active:scale-95 transition-all duration-300 disabled:opacity-50 disabled:hover:scale-100" title="Check yt-dlp version">
+            <svg x-show="!checkingVersion" class="w-5 h-5 text-gray-700 dark:text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+            </svg>
+            <svg x-show="checkingVersion" class="animate-spin w-5 h-5 text-gray-700 dark:text-gray-300" fill="none" viewBox="0 0 24 24">
+                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"/>
+            </svg>
+        </button>
+        <!-- Theme Toggle -->
+        <button @click="toggleTheme()" class="p-3.5 rounded-2xl glass-card bg-white/40 dark:bg-black/30 border border-white/40 dark:border-white/10 shadow-xl hover:scale-110 active:scale-95 transition-all duration-300">
+            <svg x-show="!darkMode" class="w-5 h-5 text-indigo-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"/></svg>
+            <svg x-show="darkMode" class="w-5 h-5 text-yellow-300" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"/></svg>
+        </button>
+    </div>
+
+    <!-- Version Check Result Toast -->
+    <div x-show="versionInfo" x-transition:enter="transition ease-out duration-300" x-transition:enter-start="opacity-0 translate-y-4" x-transition:enter-end="opacity-100 translate-y-0" x-transition:leave="transition ease-in duration-200" x-transition:leave-start="opacity-100" x-transition:leave-end="opacity-0" class="fixed top-20 right-4 z-50 p-4 rounded-xl glass-card bg-white/80 dark:bg-slate-800/80 border border-white/50 dark:border-slate-700/50 shadow-xl max-w-xs" x-cloak>
+        <div class="flex items-start gap-3">
+            <svg class="w-5 h-5 text-indigo-500 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+            </svg>
+            <div>
+                <h4 class="font-semibold text-gray-800 dark:text-gray-100 text-sm">yt-dlp Version</h4>
+                <p x-text="versionInfo" class="text-sm text-gray-600 dark:text-gray-400 mt-1"></p>
+            </div>
+            <button @click="versionInfo = null" class="ml-auto p-1 rounded-lg hover:bg-gray-200/50 dark:hover:bg-slate-700/50 transition-colors">
+                <svg class="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+            </button>
+        </div>
+    </div>
 
     <main class="min-h-full flex items-center justify-center p-4 sm:p-8">
         <div class="w-full max-w-lg">
@@ -126,7 +155,7 @@
                                         <svg x-show="completed" class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/>
                                         </svg>
-                                        <span x-text="downloading ? (queued ? 'Queued (Waiting in line...)' : `Herunterladen • ${progress}%`) : (completed ? 'Operation Complete!' : 'Begin Download')"></span>
+                                        <span x-text="downloading ? (queued ? 'Queued (Waiting in line...)' : `Herunterladen • ${progress}%`) : (completed ? 'Download abgeschlossen' : 'Begin Download')"></span>
                                     </div>
                                 </button>
                             </div>
@@ -165,6 +194,8 @@
                 downloadUrl: null,
                 darkMode: false,
                 eventSource: null,
+                checkingVersion: false,
+                versionInfo: null,
 
                 init() {
                     this.darkMode = localStorage.getItem('darkMode') === 'true' || (!('darkMode' in localStorage) && window.matchMedia('(prefers-color-scheme: dark)').matches);
@@ -201,13 +232,11 @@
                 },
 
                 async analyze() {
-                    console.log('Analyze clicked! URL:', this.url);
                     if (!this.url) return;
                     this.loading = true;
                     this.error = null;
 
                     const cleanUrl = this.cleanUrl(this.url);
-                    console.log('Cleaned URL:', cleanUrl);
 
                     try {
                         const response = await fetch('/api/analyze', {
@@ -216,16 +245,12 @@
                             body: JSON.stringify({ url: cleanUrl, format: this.format })
                         });
 
-                        console.log('Analyze response status:', response.status);
                         const data = await response.json();
-                        console.log('Analyze response data:', data);
                         
                         if (!data.success) throw new Error('Failed to analyze');
                         
                         this.videoInfo = data.data;
-                        console.log('videoInfo set:', this.videoInfo);
                     } catch (e) {
-                        console.error('Analyze error:', e);
                         this.error = 'Unrecognized link. Check URL parameters.';
                     } finally {
                         this.loading = false;
@@ -233,16 +258,11 @@
                 },
 
                 async download() {
-                    console.log('Download clicked! videoInfo:', this.videoInfo);
-                    if (!this.videoInfo) {
-                        console.error('No videoInfo available');
-                        return;
-                    }
+                    if (!this.videoInfo) return;
                     this.downloading = true;
                     this.error = null;
 
                     const cleanUrl = this.cleanUrl(this.url);
-                    console.log('Sending download request:', { url: cleanUrl, format: this.format, quality: this.quality });
 
                     try {
                         const response = await fetch('/api/download', {
@@ -255,18 +275,14 @@
                             })
                         });
 
-                        console.log('Download response status:', response.status);
                         const data = await response.json();
-                        console.log('Download response data:', data);
                         
                         if (!data.success) throw new Error('Failed to initiate');
                         
                         this.downloadId = data.data.download_id;
                         this.queued = (data.data.status === 'queued');
-                        console.log('Connecting SSE for download:', this.downloadId);
                         this.connectSSE();
                     } catch (e) {
-                        console.error('Download error:', e);
                         this.error = 'Transfer failed to start: ' + e.message;
                         this.downloading = false;
                     }
@@ -310,6 +326,24 @@
                     this.eventSource.onerror = () => this.eventSource.close();
                 },
 
+                async checkYtdlpVersion() {
+                    this.checkingVersion = true;
+                    this.versionInfo = null;
+                    try {
+                        const response = await fetch('/api/ytdlp-version');
+                        const data = await response.json();
+                        if (data.success) {
+                            this.versionInfo = data.data.version;
+                        } else {
+                            this.versionInfo = 'Unable to check version. Is yt-dlp installed?';
+                        }
+                    } catch (e) {
+                        this.versionInfo = 'Error checking version. Service may be unavailable.';
+                    } finally {
+                        this.checkingVersion = false;
+                    }
+                },
+
                 reset() {
                     this.url = '';
                     this.videoInfo = null;
@@ -322,6 +356,7 @@
                     this.error = null;
                     this.downloadId = null;
                     this.downloadUrl = null;
+                    this.versionInfo = null;
                     if (this.eventSource) this.eventSource.close();
                 }
             }

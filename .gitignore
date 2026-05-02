@@ -54,3 +54,8 @@ downloads/
 
 # Caddy
 Caddyfile.autosave
+
+# Rust
+/target/
+**/*.rs.bk
+Cargo.lock

@@ -31,11 +31,11 @@
     <!-- Top Right Controls -->
     <div class="fixed top-4 right-4 z-50 flex items-center gap-2">
         <!-- yt-dlp Version Check -->
-        <button @click="checkYtdlpVersion()" :disabled="checkingVersion" class="p-3.5 rounded-2xl glass-card bg-white/40 dark:bg-black/30 border border-white/40 dark:border-white/10 shadow-xl hover:scale-110 active:scale-95 transition-all duration-300 disabled:opacity-50 disabled:hover:scale-100" title="Check yt-dlp version">
-            <svg x-show="!checkingVersion" class="w-5 h-5 text-gray-700 dark:text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <button @click="checkYtdlpUpdate()" :disabled="checkingUpdate" class="p-3.5 rounded-2xl glass-card bg-white/40 dark:bg-black/30 border border-white/40 dark:border-white/10 shadow-xl hover:scale-110 active:scale-95 transition-all duration-300 disabled:opacity-50 disabled:hover:scale-100" title="yt-dlp aktualisieren">
+            <svg x-show="!checkingUpdate" class="w-5 h-5 text-gray-700 dark:text-gray-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
             </svg>
-            <svg x-show="checkingVersion" class="animate-spin w-5 h-5 text-gray-700 dark:text-gray-300" fill="none" viewBox="0 0 24 24">
+            <svg x-show="checkingUpdate" class="animate-spin w-5 h-5 text-gray-700 dark:text-gray-300" fill="none" viewBox="0 0 24 24">
                 <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                 <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"/>
             </svg>
@@ -47,17 +47,17 @@
         </button>
     </div>
 
-    <!-- Version Check Result Toast -->
-    <div x-show="versionInfo" x-transition:enter="transition ease-out duration-300" x-transition:enter-start="opacity-0 translate-y-4" x-transition:enter-end="opacity-100 translate-y-0" x-transition:leave="transition ease-in duration-200" x-transition:leave-start="opacity-100" x-transition:leave-end="opacity-0" class="fixed top-20 right-4 z-50 p-4 rounded-xl glass-card bg-white/80 dark:bg-slate-800/80 border border-white/50 dark:border-slate-700/50 shadow-xl max-w-xs" x-cloak>
+    <!-- Update Check Result Toast -->
+    <div x-show="updateStatus" x-transition:enter="transition ease-out duration-300" x-transition:enter-start="opacity-0 translate-y-4" x-transition:enter-end="opacity-100 translate-y-0" x-transition:leave="transition ease-in duration-200" x-transition:leave-start="opacity-100" x-transition:leave-end="opacity-0" class="fixed top-20 right-4 z-50 p-4 rounded-xl glass-card bg-white/80 dark:bg-slate-800/80 border border-white/50 dark:border-slate-700/50 shadow-xl max-w-xs" x-cloak>
         <div class="flex items-start gap-3">
-            <svg class="w-5 h-5 text-indigo-500 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+            <svg class="w-5 h-5 text-emerald-500 flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
             </svg>
             <div>
-                <h4 class="font-semibold text-gray-800 dark:text-gray-100 text-sm">yt-dlp Version</h4>
-                <p x-text="versionInfo" class="text-sm text-gray-600 dark:text-gray-400 mt-1"></p>
+                <h4 class="font-semibold text-gray-800 dark:text-gray-100 text-sm">yt-dlp Update</h4>
+                <p x-text="updateStatus" class="text-sm text-gray-600 dark:text-gray-400 mt-1"></p>
             </div>
-            <button @click="versionInfo = null" class="ml-auto p-1 rounded-lg hover:bg-gray-200/50 dark:hover:bg-slate-700/50 transition-colors">
+            <button @click="updateStatus = null" class="ml-auto p-1 rounded-lg hover:bg-gray-200/50 dark:hover:bg-slate-700/50 transition-colors">
                 <svg class="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
             </button>
         </div>
@@ -232,8 +232,8 @@
                 downloadUrl: null,
                 darkMode: false,
                 eventSource: null,
-                checkingVersion: false,
-                versionInfo: null,
+                checkingUpdate: false,
+                updateStatus: null,
 
                 init() {
                     this.darkMode = localStorage.getItem('darkMode') === 'true' || (!('darkMode' in localStorage) && window.matchMedia('(prefers-color-scheme: dark)').matches);
@@ -364,21 +364,25 @@
                     this.eventSource.onerror = () => this.eventSource.close();
                 },
 
-                async checkYtdlpVersion() {
-                    this.checkingVersion = true;
-                    this.versionInfo = null;
+                async checkYtdlpUpdate() {
+                    this.checkingUpdate = true;
+                    this.updateStatus = null;
                     try {
-                        const response = await fetch('/api/ytdlp-version');
+                        const response = await fetch('/api/ytdlp-update', { method: 'POST' });
                         const data = await response.json();
                         if (data.success) {
-                            this.versionInfo = data.data.version;
+                            if (data.data.status === 'updated') {
+                                this.updateStatus = 'yt-dlp wurde aktualisiert';
+                            } else {
+                                this.updateStatus = 'yt-dlp ist auf dem neuesten Stand';
+                            }
                         } else {
-                            this.versionInfo = 'Version konnte nicht ermittelt werden. Ist yt-dlp installiert?';
+                            this.updateStatus = 'Update-Prüfung fehlgeschlagen';
                         }
                     } catch (e) {
-                        this.versionInfo = 'Fehler beim Prüfen der Version. Service möglicherweise nicht verfügbar.';
+                        this.updateStatus = 'Fehler bei der Update-Prüfung';
                     } finally {
-                        this.checkingVersion = false;
+                        this.checkingUpdate = false;
                     }
                 },
 
@@ -394,7 +398,7 @@
                     this.error = null;
                     this.downloadId = null;
                     this.downloadUrl = null;
-                    this.versionInfo = null;
+                    this.updateStatus = null;
                     if (this.eventSource) this.eventSource.close();
                 }
             }

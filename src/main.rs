@@ -184,7 +184,7 @@ async fn main() {
         .route("/api/download", post(start_download))
         .route("/api/progress/:download_id", get(progress_stream))
         .route("/api/file/:download_id", get(download_file))
-        .route("/api/ytdlp-version", get(get_ytdlp_version))
+        .route("/api/ytdlp-update", post(trigger_ytdlp_update))
         .layer(TraceLayer::new_for_http())
         .with_state(state);
 
@@ -318,26 +318,49 @@ async fn analyze_video(
     }))
 }
 
-async fn get_ytdlp_version() -> Json<ApiResponse<serde_json::Value>> {
-    let output = Command::new("yt-dlp")
-        .args(["--version"])
+async fn trigger_ytdlp_update() -> Json<ApiResponse<serde_json::Value>> {
+    // Run update check internally - no version info exposed
+    let update_result = Command::new("yt-dlp")
+        .args(["-U"])
         .output()
         .await;
 
-    match output {
+    match update_result {
         Ok(result) if result.status.success() => {
-            let version = String::from_utf8_lossy(&result.stdout).trim().to_string();
+            let stdout = String::from_utf8_lossy(&result.stdout);
+            
+            if stdout.contains("up to date") {
+                info!("yt-dlp update check: already current");
+                Json(ApiResponse {
+                    success: true,
+                    data: Some(serde_json::json!({ "status": "current" })),
+                    error: None,
+                })
+            } else {
+                info!("yt-dlp update check: update performed");
+                Json(ApiResponse {
+                    success: true,
+                    data: Some(serde_json::json!({ "status": "updated" })),
+                    error: None,
+                })
+            }
+        }
+        Ok(_) => {
+            warn!("yt-dlp update check failed");
             Json(ApiResponse {
-                success: true,
-                data: Some(serde_json::json!({ "version": version })),
-                error: None,
+                success: false,
+                data: None,
+                error: Some("Update check failed".to_string()),
             })
         }
-        _ => Json(ApiResponse {
-            success: false,
-            data: None,
-            error: Some("Could not determine yt-dlp version".to_string()),
-        }),
+        Err(e) => {
+            warn!("Failed to run yt-dlp update: {}", e);
+            Json(ApiResponse {
+                success: false,
+                data: None,
+                error: Some("Update check failed".to_string()),
+            })
+        }
     }
 }
 

@@ -201,12 +201,13 @@
                 },
 
                 async analyze() {
+                    console.log('Analyze clicked! URL:', this.url);
                     if (!this.url) return;
                     this.loading = true;
                     this.error = null;
 
-                    // Clean URL before sending
                     const cleanUrl = this.cleanUrl(this.url);
+                    console.log('Cleaned URL:', cleanUrl);
 
                     try {
                         const response = await fetch('/api/analyze', {
@@ -215,11 +216,16 @@
                             body: JSON.stringify({ url: cleanUrl, format: this.format })
                         });
 
+                        console.log('Analyze response status:', response.status);
                         const data = await response.json();
+                        console.log('Analyze response data:', data);
+                        
                         if (!data.success) throw new Error('Failed to analyze');
                         
                         this.videoInfo = data.data;
+                        console.log('videoInfo set:', this.videoInfo);
                     } catch (e) {
+                        console.error('Analyze error:', e);
                         this.error = 'Unrecognized link. Check URL parameters.';
                     } finally {
                         this.loading = false;
@@ -227,12 +233,16 @@
                 },
 
                 async download() {
-                    if (!this.videoInfo) return;
+                    console.log('Download clicked! videoInfo:', this.videoInfo);
+                    if (!this.videoInfo) {
+                        console.error('No videoInfo available');
+                        return;
+                    }
                     this.downloading = true;
                     this.error = null;
 
-                    // Use cleaned URL for download too
                     const cleanUrl = this.cleanUrl(this.url);
+                    console.log('Sending download request:', { url: cleanUrl, format: this.format, quality: this.quality });
 
                     try {
                         const response = await fetch('/api/download', {
@@ -245,14 +255,19 @@
                             })
                         });
 
+                        console.log('Download response status:', response.status);
                         const data = await response.json();
+                        console.log('Download response data:', data);
+                        
                         if (!data.success) throw new Error('Failed to initiate');
                         
                         this.downloadId = data.data.download_id;
                         this.queued = (data.data.status === 'queued');
+                        console.log('Connecting SSE for download:', this.downloadId);
                         this.connectSSE();
                     } catch (e) {
-                        this.error = 'Transfer failed to start.';
+                        console.error('Download error:', e);
+                        this.error = 'Transfer failed to start: ' + e.message;
                         this.downloading = false;
                     }
                 },

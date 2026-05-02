@@ -1,3 +1,4 @@
+use athena::errors::{AppError, AppResult};
 use axum::{
     body::Body,
     extract::{Path, State, Query},
@@ -51,8 +52,19 @@ static DOWNLOAD_DIR: Lazy<PathBuf> = Lazy::new(|| {
 });
 
 // Short max age for temp files (1 hour)
-const MAX_FILE_AGE_HOURS: f64 = 1.0;
-const CLEANUP_INTERVAL_SECONDS: u64 = 600;
+static MAX_FILE_AGE_HOURS: Lazy<f64> = Lazy::new(|| {
+    std::env::var("MAX_FILE_AGE_HOURS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1.0)
+});
+
+static CLEANUP_INTERVAL_SECONDS: Lazy<u64> = Lazy::new(|| {
+    std::env::var("CLEANUP_INTERVAL_SECONDS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(600)
+});
 
 // Global semaphore for concurrent downloads
 static DOWNLOAD_SEMAPHORE: Lazy<Arc<Semaphore>> = Lazy::new(|| {
@@ -183,6 +195,9 @@ async fn is_authenticated(
 
 #[tokio::main]
 async fn main() {
+    // Load environment variables from .env file
+    dotenvy::dotenv().ok();
+
     // Initialize tracing
     let subscriber = tracing_subscriber::fmt()
         .with_env_filter("info")
@@ -264,7 +279,7 @@ async fn root() -> Html<&'static str> {
 async fn login(
     State(state): State<SharedState>,
     Json(request): Json<LoginRequest>,
-) -> Json<ApiResponse<LoginResponse>> {
+) -> AppResult<Json<ApiResponse<LoginResponse>>> {
     if let Some(ref hash) = *PASSWORD_HASH {
         let mut hasher = Sha256::new();
         hasher.update(request.password.as_bytes());
@@ -278,40 +293,36 @@ async fn login(
                 tokens.insert(token.clone(), ());
             }
             info!("Login successful, token generated");
-            return Json(ApiResponse {
+            return Ok(Json(ApiResponse {
                 success: true,
                 data: Some(LoginResponse { token }),
                 error: None,
-            });
+            }));
         } else {
-            return Json(ApiResponse {
-                success: false,
-                data: None,
-                error: Some("Invalid password".to_string()),
+            return Err(AppError::Unauthorized {
+                message: "Invalid password".to_string(),
             });
         }
     }
     
     // No password set, return success with empty token
-    Json(ApiResponse {
+    Ok(Json(ApiResponse {
         success: true,
         data: Some(LoginResponse { token: String::new() }),
         error: None,
-    })
+    }))
 }
 
 async fn analyze_video(
     State(state): State<SharedState>,
     headers: axum::http::HeaderMap,
     Json(request): Json<DownloadRequest>,
-) -> Result<Json<ApiResponse<AnalyzeResponse>>, StatusCode> {
+) -> AppResult<Json<ApiResponse<AnalyzeResponse>>> {
     // Check authentication
     if !is_authenticated(&headers, None, &state).await {
-        return Ok(Json(ApiResponse {
-            success: false,
-            data: None,
-            error: Some("Unauthorized".to_string()),
-        }));
+        return Err(AppError::Unauthorized {
+            message: "Unauthorized".to_string(),
+        });
     }
     
     info!("Analyzing video: {}", request.url);
@@ -326,27 +337,20 @@ async fn analyze_video(
         ])
         .output()
         .await
-        .map_err(|e| {
-            error!("Failed to execute yt-dlp: {}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
+        .map_err(|e| AppError::ExternalCommand {
+            message: format!("Failed to execute yt-dlp: {}", e),
         })?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         error!("yt-dlp analyze failed: {}", stderr);
-        return Ok(Json(ApiResponse {
-            success: false,
-            data: None,
-            error: Some("Failed to analyze video".to_string()),
-        }));
+        return Err(AppError::ExternalCommand {
+            message: "Failed to analyze video".to_string(),
+        });
     }
 
     let json_str = String::from_utf8_lossy(&output.stdout);
-    let info: serde_json::Value = serde_json::from_str(&json_str)
-        .map_err(|e| {
-            error!("Failed to parse yt-dlp output: {}", e);
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+    let info: serde_json::Value = serde_json::from_str(&json_str)?;
 
     // Format duration
     let duration_secs = info.get("duration")
@@ -426,13 +430,11 @@ async fn analyze_video(
 async fn trigger_ytdlp_update(
     State(state): State<SharedState>,
     headers: axum::http::HeaderMap,
-) -> Json<ApiResponse<serde_json::Value>> {
+) -> AppResult<Json<ApiResponse<serde_json::Value>>> {
     // Check authentication
     if !is_authenticated(&headers, None, &state).await {
-        return Json(ApiResponse {
-            success: false,
-            data: None,
-            error: Some("Unauthorized".to_string()),
+        return Err(AppError::Unauthorized {
+            message: "Unauthorized".to_string(),
         });
     }
     
@@ -448,34 +450,30 @@ async fn trigger_ytdlp_update(
             
             if stdout.contains("up to date") {
                 info!("yt-dlp update check: already current");
-                Json(ApiResponse {
+                Ok(Json(ApiResponse {
                     success: true,
                     data: Some(serde_json::json!({ "status": "current" })),
                     error: None,
-                })
+                }))
             } else {
                 info!("yt-dlp update check: update performed");
-                Json(ApiResponse {
+                Ok(Json(ApiResponse {
                     success: true,
                     data: Some(serde_json::json!({ "status": "updated" })),
                     error: None,
-                })
+                }))
             }
         }
         Ok(_) => {
             warn!("yt-dlp update check failed");
-            Json(ApiResponse {
-                success: false,
-                data: None,
-                error: Some("Update check failed".to_string()),
+            Err(AppError::ExternalCommand {
+                message: "Update check failed".to_string(),
             })
         }
         Err(e) => {
             warn!("Failed to run yt-dlp update: {}", e);
-            Json(ApiResponse {
-                success: false,
-                data: None,
-                error: Some("Update check failed".to_string()),
+            Err(AppError::ExternalCommand {
+                message: format!("Update check failed: {}", e),
             })
         }
     }
@@ -485,13 +483,11 @@ async fn start_download(
     State(state): State<SharedState>,
     headers: axum::http::HeaderMap,
     Json(request): Json<DownloadRequest>,
-) -> Json<ApiResponse<DownloadResponse>> {
+) -> AppResult<Json<ApiResponse<DownloadResponse>>> {
     // Check authentication
     if !is_authenticated(&headers, None, &state).await {
-        return Json(ApiResponse {
-            success: false,
-            data: None,
-            error: Some("Unauthorized".to_string()),
+        return Err(AppError::Unauthorized {
+            message: "Unauthorized".to_string(),
         });
     }
     
@@ -524,14 +520,14 @@ async fn start_download(
         .await;
     });
 
-    Json(ApiResponse {
+    Ok(Json(ApiResponse {
         success: true,
         data: Some(DownloadResponse {
             download_id,
             status: "queued".to_string(),
         }),
         error: None,
-    })
+    }))
 }
 
 async fn download_task(
@@ -809,12 +805,14 @@ async fn download_file(
     headers: axum::http::HeaderMap,
     Path(download_id): Path<String>,
     Query(params): Query<StdHashMap<String, String>>,
-) -> Response {
+) -> AppResult<Response> {
     let query_token = params.get("token").map(|s| s.as_str());
     
     // Check authentication
     if !is_authenticated(&headers, query_token, &state).await {
-        return (StatusCode::UNAUTHORIZED, "Unauthorized").into_response();
+        return Err(AppError::Unauthorized {
+            message: "Unauthorized".to_string(),
+        });
     }
     
     let download_info = {
@@ -824,20 +822,23 @@ async fn download_file(
 
     let info = match download_info {
         Some(i) if i.status == "completed" => i,
-        _ => {
-            return (StatusCode::NOT_FOUND, "Download not found or not ready").into_response();
+        Some(i) => {
+            return Err(AppError::DownloadNotReady { status: i.status });
+        }
+        None => {
+            return Err(AppError::DownloadNotFound { id: download_id });
         }
     };
 
     let file_path = match info.file_path {
         Some(p) => p,
         None => {
-            return (StatusCode::NOT_FOUND, "File not found").into_response();
+            return Err(AppError::FileNotFound { path: "Path not set in info".to_string() });
         }
     };
 
     if !file_path.exists() {
-        return (StatusCode::NOT_FOUND, "File not found on disk").into_response();
+        return Err(AppError::FileNotFound { path: file_path.to_string_lossy().to_string() });
     }
 
     let file_name = info.file_name
@@ -848,67 +849,54 @@ async fn download_file(
             name.replace(&id_marker, ".")
         })
         .unwrap_or_else(|| download_id.clone());
-    let file_size = match fs::metadata(&file_path).await {
-        Ok(meta) => meta.len(),
-        Err(e) => {
-            error!("Failed to get file metadata: {}", e);
-            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-        }
-    };
+    let file_size = fs::metadata(&file_path).await?.len();
 
     let file_path_clone = file_path.clone();
     let download_id_clone = download_id.clone();
 
-    match tokio::fs::File::open(&file_path).await {
-        Ok(file) => {
-            let stream = tokio_util::io::ReaderStream::new(file);
-            // Wrap stream to delete file after streaming completes
-            let wrapped_stream = stream.then(move |chunk| {
-                let path = file_path_clone.clone();
-                let _id = download_id_clone.clone();
-                async move {
-                    // If this is the last chunk (Err or Ok with empty), delete the file
-                    if chunk.is_err() {
-                        // Try to delete file on error
-                        let _ = fs::remove_file(&path).await;
-                    }
-                    chunk
-                }
-            });
-            let body = Body::from_stream(wrapped_stream);
-
-            // Build response with proper header handling
-            let mut response = (StatusCode::OK, body).into_response();
-            let headers = response.headers_mut();
-            headers.insert("content-type", "application/octet-stream".parse().unwrap());
-            headers.insert("content-disposition", format!("attachment; filename=\"{}\"", file_name).parse().unwrap());
-            headers.insert("content-length", file_size.to_string().parse().unwrap());
-
-            // Delete file after response is sent
-            tokio::spawn(async move {
-                // Give a small delay to ensure streaming starts, then mark for cleanup
-                sleep(Duration::from_secs(2)).await;
-                if let Err(e) = fs::remove_file(&file_path).await {
-                    warn!("Failed to remove temp file {:?}: {}", file_path, e);
-                } else {
-                    info!("Removed temp file for download {}: {:?}", download_id, file_path);
-                }
-                // Remove from memory map too
-                let mut downloads = state.active_downloads.lock().await;
-                downloads.remove(&download_id);
-            });
-
-            response
+    let file = tokio::fs::File::open(&file_path).await?;
+    let stream = tokio_util::io::ReaderStream::new(file);
+    // Wrap stream to delete file after streaming completes
+    let wrapped_stream = stream.then(move |chunk| {
+        let path = file_path_clone.clone();
+        let _id = download_id_clone.clone();
+        async move {
+            // If this is the last chunk (Err or Ok with empty), delete the file
+            if chunk.is_err() {
+                // Try to delete file on error
+                let _ = fs::remove_file(&path).await;
+            }
+            chunk
         }
-        Err(e) => {
-            error!("Failed to open file: {}", e);
-            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+    });
+    let body = Body::from_stream(wrapped_stream);
+
+    // Build response with proper header handling
+    let mut response = (StatusCode::OK, body).into_response();
+    let headers = response.headers_mut();
+    headers.insert("content-type", "application/octet-stream".parse().unwrap());
+    headers.insert("content-disposition", format!("attachment; filename=\"{}\"", file_name).parse().unwrap());
+    headers.insert("content-length", file_size.to_string().parse().unwrap());
+
+    // Delete file after response is sent
+    tokio::spawn(async move {
+        // Give a small delay to ensure streaming starts, then mark for cleanup
+        sleep(Duration::from_secs(2)).await;
+        if let Err(e) = fs::remove_file(&file_path).await {
+            warn!("Failed to remove temp file {:?}: {}", file_path, e);
+        } else {
+            info!("Removed temp file for download {}: {:?}", download_id, file_path);
         }
-    }
+        // Remove from memory map too
+        let mut downloads = state.active_downloads.lock().await;
+        downloads.remove(&download_id);
+    });
+
+    Ok(response)
 }
 
 async fn periodic_cleanup(state: SharedState) {
-    let mut interval = interval(Duration::from_secs(CLEANUP_INTERVAL_SECONDS));
+    let mut interval = interval(Duration::from_secs(*CLEANUP_INTERVAL_SECONDS));
 
     loop {
         interval.tick().await;
@@ -933,7 +921,7 @@ async fn cleanup_old_data(state: &SharedState) {
                                     / 3600.0;
                                 let current_hours = current_time / 3600.0;
                                 
-                                if current_hours - age_hours > MAX_FILE_AGE_HOURS {
+                                if current_hours - age_hours > *MAX_FILE_AGE_HOURS {
                                     if let Err(e) = fs::remove_file(&path).await {
                                         warn!("Failed to remove old file {:?}: {}", path, e);
                                     } else {
@@ -957,7 +945,7 @@ async fn cleanup_old_data(state: &SharedState) {
             .iter()
             .filter(|(_, info)| {
                 let age_hours = (current_time - info.timestamp) / 3600.0;
-                age_hours > MAX_FILE_AGE_HOURS
+                age_hours > *MAX_FILE_AGE_HOURS
             })
             .map(|(id, _)| id.clone())
             .collect();
@@ -1226,6 +1214,7 @@ mod tests {
     async fn test_app_state_creation() {
         let state = Arc::new(AppState {
             active_downloads: Mutex::new(HashMap::new()),
+            auth_tokens: Mutex::new(HashMap::new()),
         });
 
         // Test inserting a download
@@ -1255,6 +1244,7 @@ mod tests {
     async fn test_download_info_update() {
         let state = Arc::new(AppState {
             active_downloads: Mutex::new(HashMap::new()),
+            auth_tokens: Mutex::new(HashMap::new()),
         });
 
         // Insert
@@ -1290,8 +1280,8 @@ mod tests {
 
     #[test]
     fn test_constants() {
-        assert_eq!(MAX_FILE_AGE_HOURS, 1.0);
-        assert_eq!(CLEANUP_INTERVAL_SECONDS, 600);
+        assert_eq!(*MAX_FILE_AGE_HOURS, 1.0);
+        assert_eq!(*CLEANUP_INTERVAL_SECONDS, 600);
     }
 
     #[test]

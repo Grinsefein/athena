@@ -30,6 +30,16 @@ cargo run
 
 Server listens on `0.0.0.0:8000` by default.
 
+## Multi-Architecture Support (ARM64/Raspberry Pi)
+
+Athena Pi is designed to run efficiently on ARM64 devices like the Raspberry Pi.
+
+### Build for ARM64 using Docker Buildx
+
+```bash
+docker buildx build --platform linux/amd64,linux/arm64 -t your-username/athena-pi:latest --push .
+```
+
 ## Configuration
 
 Environment variables:

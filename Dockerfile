@@ -1,50 +1,53 @@
-# Multi-stage build for minimal final image
-# Using official Rust image which supports ARM64 (for Raspberry Pi)
-FROM rust:1.75-slim-bookworm AS builder
-
+# --- Stage 1: Builder ---
+FROM --platform=$BUILDPLATFORM rust:1.85-slim-bookworm AS builder
 WORKDIR /app
 
-# Install dependencies needed for building
+# Install build dependencies
 RUN apt-get update && apt-get install -y \
     pkg-config \
     libssl-dev \
-    curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy manifest files first for better layer caching
+# Step A: Cache dependencies
 COPY Cargo.toml Cargo.lock ./
-COPY src ./src
+RUN mkdir src && echo "fn main() {}" > src/main.rs
+# Create a dummy frontend.html so include_str! doesn't fail during dependency caching
+RUN touch frontend.html 
+RUN cargo build --release
+RUN rm -f target/release/deps/athena*
 
-# Build release binary
+# Step B: Build actual source
+COPY frontend.html .
+COPY src ./src
 RUN cargo build --release
 
-# Final runtime image
+# --- Stage 2: Runtime ---
 FROM debian:bookworm-slim
-
 WORKDIR /app
 
-# Install yt-dlp and required dependencies
-RUN apt-get update && apt-get install -y \
-    curl \
+# Security: Non-root user
+RUN groupadd -r athena && useradd -r -g athena athena
+
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     python3 \
     python3-pip \
     ca-certificates \
-    && pip3 install --break-system-packages yt-dlp \
+    curl \
+    && pip3 install --no-cache-dir --break-system-packages yt-dlp \
+    && apt-get purge -y --auto-remove \
     && rm -rf /var/lib/apt/lists/*
 
-# Create download directory
-RUN mkdir -p /tmp/athena-downloads
+RUN mkdir -p /tmp/athena-downloads && chown athena:athena /tmp/athena-downloads
 
-# Copy built binary from builder
-COPY --from=builder /app/target/release/athena /app/athena
+# Copy the binary from the builder stage
+COPY --from=builder --chown=athena:athena /app/target/release/athena /app/athena
 
-# Expose port
+USER athena
 EXPOSE 8000
 
-# Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD curl -f http://localhost:8000/ || exit 1
 
-# Run the server
 CMD ["/app/athena"]

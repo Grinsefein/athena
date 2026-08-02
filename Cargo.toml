@@ -32,6 +32,8 @@ bcrypt = "0.15"
 reqwest = { version = "0.12", features = ["json"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 lofty = "0.22"
+zip = "0.6"
+tracing-appender = "0.2"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt", "macros"] }

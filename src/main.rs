@@ -73,9 +73,12 @@ static DOWNLOAD_SEMAPHORE: Lazy<Arc<Semaphore>> = Lazy::new(|| {
     Arc::new(Semaphore::new(max))
 });
 
-// Pre-compiled regex for progress parsing
+// Pre-compiled regex for progress parsing (captures percentage, speed, and ETA)
 static PROGRESS_REGEX: Lazy<Regex> = Lazy::new(|| {
-    Regex::new(r"\[download\]\s+(\d+\.?\d*)%").unwrap()
+    // Matches: [download]  45.2% of  123.45MiB at    5.67MiB/s ETA 00:15
+    // or: [download]  45.2% of  ~123.45MiB at    5.67MiB/s ETA 00:15
+    // or: [download]  45.2% of  unknown size at    5.67MiB/s ETA 00:15
+    Regex::new(r"\[download\]\s+(\d+\.?\d*)%(?:\s+of\s+(?:~)?(\d+\.?\d*)(KiB|MiB|GiB|unknown))?(?:\s+at\s+(\d+\.?\d*)(KiB|MiB|GiB)/s)?(?:\s+ETA\s+(\d+:?\d*))?").unwrap()
 });
 
 // Constants
@@ -97,6 +100,8 @@ struct DownloadInfo {
     file_name: Option<String>,
     error: Option<String>,
     timestamp: f64,
+    speed: Option<String>,
+    eta: Option<String>,
 }
 
 // Request/Response models
@@ -142,6 +147,8 @@ struct FormatInfo {
     format: String,
     quality: String,
     label: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    filesize: Option<String>,
 }
 
 fn get_audio_multiplier(acodec: &str, ext: &str) -> f64 {
@@ -190,6 +197,10 @@ struct ProgressUpdate {
     download_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    speed: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    eta: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -298,6 +309,8 @@ async fn main() {
     // Build router
     let app = Router::new()
         .route("/", get(root))
+        .route("/manifest.json", get(manifest_handler))
+        .route("/share", post(handle_share))
         .route("/api/config", get(get_config))
         .route("/api/login", post(login))
         .route("/api/analyze", post(analyze_video))
@@ -324,6 +337,70 @@ async fn main() {
 
 async fn root() -> Html<&'static str> {
     Html(INDEX_HTML)
+}
+
+// Serve manifest.json for PWA support
+async fn manifest_handler() -> impl IntoResponse {
+    let manifest = include_str!("../manifest.json");
+    (
+        [("Content-Type", "application/json")],
+        manifest,
+    )
+}
+
+// Handle shared URLs from Web Share Target API
+#[derive(Debug, Deserialize)]
+struct ShareRequest {
+    url: Option<String>,
+    text: Option<String>,
+    title: Option<String>,
+}
+
+async fn handle_share(
+    State(state): State<SharedState>,
+    Json(request): Json<ShareRequest>,
+) -> Result<Html<String>, StatusCode> {
+    // Extract URL from share request
+    let url_to_analyze = request.url.or_else(|| {
+        // Try to find a URL in the text if no direct URL was provided
+        request.text.and_then(|text| {
+            let url_regex = Regex::new(r"https?://[^\s]+").unwrap();
+            url_regex.find(&text).map(|m| m.as_str().to_string())
+        })
+    });
+
+    let html_content = if let Some(url) = url_to_analyze {
+        // Return HTML that auto-fills the URL and triggers analysis
+        format!(
+            r#"<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<script>
+window.addEventListener('load', function() {{
+    const input = document.querySelector('input[x-model="url"]');
+    if (input) {{
+        input.value = '{url}';
+        // Trigger Alpine.js reactivity
+        setTimeout(() => {{
+            window.athenaApp && window.athenaApp.analyze && window.athenaApp.analyze();
+        }}, 100);
+    }}
+}});
+</script>
+</head>
+<body>
+<p>Processing shared URL...</p>
+</body>
+</html>"#,
+            url = url.replace('\'', "\\'")
+        )
+    } else {
+        // No URL found, just show the main page
+        INDEX_HTML.to_string()
+    };
+
+    Ok(Html(html_content))
 }
 
 async fn login(
@@ -466,20 +543,47 @@ async fn analyze_video(
 
     let mut all_formats = Vec::new();
 
+    // Helper to format filesize
+    fn format_filesize(bytes: f64) -> Option<String> {
+        if bytes <= 0.0 { return None; }
+        if bytes < 1024.0 * 1024.0 {
+            Some(format!("{:.1} KB", bytes / 1024.0))
+        } else if bytes < 1024.0 * 1024.0 * 1024.0 {
+            Some(format!("{:.1} MB", bytes / (1024.0 * 1024.0)))
+        } else {
+            Some(format!("{:.2} GB", bytes / (1024.0 * 1024.0 * 1024.0)))
+        }
+    }
+
     // Add Video Beste Qualität first
     all_formats.push(FormatInfo {
         media_type: "video".to_string(),
         format: "mp4/webm".to_string(),
         quality: "best".to_string(),
         label: "Beste Qualität (Video)".to_string(),
+        filesize: None,
     });
 
     for (height, ext) in parsed_video_formats {
+        // Try to find filesize for this format from the original info
+        let filesize = info.get("formats")
+            .and_then(|f| f.as_array())
+            .and_then(|arr| arr.iter().find(|fmt| {
+                fmt.get("height").and_then(|h| h.as_u64()) == Some(height) &&
+                fmt.get("ext").and_then(|e| e.as_str()) == Some(&ext)
+            }))
+            .and_then(|fmt| {
+                fmt.get("filesize").and_then(|fs| fs.as_f64())
+                    .or_else(|| fmt.get("filesize_approx").and_then(|fs| fs.as_f64()))
+            })
+            .and_then(|fs| format_filesize(fs));
+
         all_formats.push(FormatInfo {
             media_type: "video".to_string(),
             format: ext.clone(),
             quality: format!("{}p-{}", height, ext),
             label: format!("{}p ({})", height, ext),
+            filesize,
         });
     }
 
@@ -489,6 +593,7 @@ async fn analyze_video(
         format: "best".to_string(),
         quality: "best".to_string(),
         label: "Beste Qualität (Audio)".to_string(),
+        filesize: None,
     });
 
     for (format_id, format_name, abr, _) in parsed_audio_formats {
@@ -498,11 +603,24 @@ async fn analyze_video(
             format_name.to_uppercase()
         };
 
+        // Try to find filesize for this audio format
+        let filesize = info.get("formats")
+            .and_then(|f| f.as_array())
+            .and_then(|arr| arr.iter().find(|fmt| {
+                fmt.get("format_id").and_then(|id| id.as_str()) == Some(&format_id)
+            }))
+            .and_then(|fmt| {
+                fmt.get("filesize").and_then(|fs| fs.as_f64())
+                    .or_else(|| fmt.get("filesize_approx").and_then(|fs| fs.as_f64()))
+            })
+            .and_then(|fs| format_filesize(fs));
+
         all_formats.push(FormatInfo {
             media_type: "audio".to_string(),
             format: format_name,
             quality: format_id,
             label,
+            filesize,
         });
     }
 
@@ -606,6 +724,8 @@ async fn start_download(
             file_name: None,
             error: None,
             timestamp: now_secs(),
+            speed: None,
+            eta: None,
         });
     }
 
@@ -761,9 +881,21 @@ async fn execute_download(
         if let Some(cap) = PROGRESS_REGEX.captures(&line) {
             if let Some(percent_match) = cap.get(1) {
                 if let Ok(percent) = percent_match.as_str().parse::<f64>() {
+                    // Extract speed (group 4 = value, group 5 = unit)
+                    let speed = if let (Some(speed_val), Some(speed_unit)) = (cap.get(4), cap.get(5)) {
+                        Some(format!("{} {}/s", speed_val.as_str(), speed_unit.as_str()))
+                    } else {
+                        None
+                    };
+                    
+                    // Extract ETA (group 6)
+                    let eta = cap.get(6).map(|m| m.as_str().to_string());
+                    
                     let mut downloads = state.active_downloads.lock().await;
                     if let Some(info) = downloads.get_mut(download_id) {
                         info.progress = percent;
+                        info.speed = speed;
+                        info.eta = eta;
                     }
                 }
             }
@@ -867,7 +999,7 @@ async fn progress_stream(
         
         // Main stream loop
         loop {
-            let (status, progress, file_path, error) = {
+            let (status, progress, file_path, error, speed, eta) = {
                 let downloads = state.active_downloads.lock().await;
                 match downloads.get(&download_id) {
                     Some(info) => (
@@ -875,6 +1007,8 @@ async fn progress_stream(
                         info.progress,
                         info.file_path.clone(),
                         info.error.clone(),
+                        info.speed.clone(),
+                        info.eta.clone(),
                     ),
                     None => {
                         let json = serde_json::to_string(&ProgressUpdate {
@@ -882,6 +1016,8 @@ async fn progress_stream(
                             progress: 0.0,
                             download_url: None,
                             error: Some(String::from("Download not found")),
+                            speed: None,
+                            eta: None,
                         }).unwrap_or_default();
                         yield Ok(Event::default().data(json));
                         break;
@@ -901,6 +1037,8 @@ async fn progress_stream(
                 progress,
                 download_url,
                 error,
+                speed,
+                eta,
             }).unwrap_or_default();
             yield Ok(Event::default().data(json));
 
@@ -1210,17 +1348,41 @@ mod tests {
     #[test]
     fn test_progress_regex_matches() {
         let test_cases = vec![
-            ("[download]  50.5%", Some("50.5")),
-            ("[download] 100%", Some("100")),
-            ("[download]   0%", Some("0")),
-            ("[download]  12.34% of 100MiB", Some("12.34")),
+            // Basic percentage only
+            ("[download]  50.5%", Some(("50.5", None, None, None))),
+            ("[download] 100%", Some(("100", None, None, None))),
+            ("[download]   0%", Some(("0", None, None, None))),
+            // With file size
+            ("[download]  12.34% of 100MiB", Some(("12.34", Some("100"), Some("MiB"), None))),
+            ("[download]  50% of ~123.45MiB", Some(("50", Some("123.45"), Some("MiB"), None))),
+            // With speed
+            ("[download]  50% of 100MiB at 5.67MiB/s", Some(("50", Some("100"), Some("MiB"), Some("5.67")))),
+            // Full format with ETA
+            ("[download]  45.2% of  123.45MiB at    5.67MiB/s ETA 00:15", Some(("45.2", Some("123.45"), Some("MiB"), Some("5.67")))),
+            ("[download]  80% of ~500MiB at 10.5MiB/s ETA 01:30", Some(("80", Some("500"), Some("MiB"), Some("10.5")))),
         ];
 
         for (input, expected) in test_cases {
             let caps = PROGRESS_REGEX.captures(input);
-            if let Some(expected_val) = expected {
+            if let Some((exp_pct, exp_size_val, exp_size_unit, exp_speed)) = expected {
                 assert!(caps.is_some(), "Should match: {}", input);
-                assert_eq!(caps.unwrap().get(1).unwrap().as_str(), expected_val);
+                let caps = caps.unwrap();
+                assert_eq!(caps.get(1).unwrap().as_str(), exp_pct, "Percentage mismatch for: {}", input);
+                
+                if let Some(exp_val) = exp_size_val {
+                    assert!(caps.get(2).is_some(), "Should have size value for: {}", input);
+                    assert_eq!(caps.get(2).unwrap().as_str(), exp_val, "Size value mismatch for: {}", input);
+                }
+                
+                if let Some(exp_unit) = exp_size_unit {
+                    assert!(caps.get(3).is_some(), "Should have size unit for: {}", input);
+                    assert_eq!(caps.get(3).unwrap().as_str(), exp_unit, "Size unit mismatch for: {}", input);
+                }
+                
+                if let Some(exp_spd) = exp_speed {
+                    assert!(caps.get(4).is_some(), "Should have speed for: {}", input);
+                    assert_eq!(caps.get(4).unwrap().as_str(), exp_spd, "Speed mismatch for: {}", input);
+                }
             }
         }
     }
@@ -1306,11 +1468,15 @@ mod tests {
             progress: 100.0,
             download_url: Some("/api/file/123".to_string()),
             error: None,
+            speed: Some("5.67 MiB/s".to_string()),
+            eta: Some("00:15".to_string()),
         };
         let json = serde_json::to_string(&update).unwrap();
         assert!(json.contains("\"status\":\"completed\""));
         assert!(json.contains("\"progress\":100.0"));
         assert!(json.contains("\"download_url\":\"/api/file/123\""));
+        assert!(json.contains("\"speed\":\"5.67 MiB/s\""));
+        assert!(json.contains("\"eta\":\"00:15\""));
     }
 
     #[test]
@@ -1320,10 +1486,14 @@ mod tests {
             progress: 50.0,
             download_url: None,
             error: None,
+            speed: None,
+            eta: None,
         };
         let json = serde_json::to_string(&update).unwrap();
         assert!(!json.contains("download_url"));
         assert!(!json.contains("error"));
+        assert!(!json.contains("\"speed\""));
+        assert!(!json.contains("\"eta\""));
     }
 
     #[test]

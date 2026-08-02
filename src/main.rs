@@ -14,7 +14,6 @@ use serde::{Deserialize, Serialize};
 use std::{
     borrow::Cow,
     collections::HashMap,
-    collections::HashMap as StdHashMap,
     path::PathBuf,
     process::Stdio,
     sync::Arc,
@@ -79,6 +78,9 @@ static DOWNLOAD_SEMAPHORE: Lazy<Arc<Semaphore>> = Lazy::new(|| {
 static PROGRESS_REGEX: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"\[download\]\s+(\d+\.?\d*)%").unwrap()
 });
+
+// Constants
+const SECONDS_PER_DAY: u64 = 24 * 60 * 60;
 
 // App state
 type SharedState = Arc<AppState>;
@@ -454,9 +456,15 @@ async fn trigger_ytdlp_update(
         });
     }
     
-    // Run update check internally - no version info exposed
-    let update_result = Command::new("yt-dlp")
-        .args(["-U"])
+    // Run update check internally using pip3 (for pip-installed yt-dlp)
+    let update_result = Command::new("pip3")
+        .args([
+            "install",
+            "--upgrade",
+            "--quiet",
+            "--break-system-packages",
+            "yt-dlp"
+        ])
         .output()
         .await;
 
@@ -464,7 +472,7 @@ async fn trigger_ytdlp_update(
         Ok(result) if result.status.success() => {
             let stdout = String::from_utf8_lossy(&result.stdout);
             
-            if stdout.contains("up to date") {
+            if stdout.contains("Requirement already satisfied") || stdout.is_empty() {
                 info!("yt-dlp update check: already current");
                 Ok(Json(ApiResponse {
                     success: true,
@@ -994,8 +1002,15 @@ fn sanitize_filename(name: &str) -> String {
 async fn update_yt_dlp() {
     info!("Checking for yt-dlp updates...");
     
-    let output = Command::new("yt-dlp")
-        .args(["-U"])
+    // Try pip3 upgrade first (for pip-installed yt-dlp in Docker)
+    let output = Command::new("pip3")
+        .args([
+            "install",
+            "--upgrade",
+            "--quiet",
+            "--break-system-packages",
+            "yt-dlp"
+        ])
         .output()
         .await;
     
@@ -1005,24 +1020,24 @@ async fn update_yt_dlp() {
             let stderr = String::from_utf8_lossy(&result.stderr);
             
             if result.status.success() {
-                if stdout.contains("up to date") {
+                if stdout.contains("Requirement already satisfied") || stdout.is_empty() {
                     info!("yt-dlp is already up to date");
                 } else {
-                    info!("yt-dlp updated successfully: {}", stdout.trim());
+                    info!("yt-dlp updated successfully");
                 }
             } else {
                 warn!("yt-dlp update check failed: {} {}", stdout, stderr);
             }
         }
         Err(e) => {
-            warn!("Failed to run yt-dlp -U: {}", e);
+            warn!("Failed to run pip3 install --upgrade yt-dlp: {}", e);
         }
     }
 }
 
 /// Periodically check for yt-dlp updates (every 24 hours)
 async fn periodic_yt_dlp_update() {
-    let mut interval = interval(Duration::from_secs(24 * 60 * 60)); // 24 hours
+    let mut interval = interval(Duration::from_secs(SECONDS_PER_DAY)); // 24 hours
     
     loop {
         interval.tick().await;

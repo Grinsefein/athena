@@ -215,7 +215,6 @@ pub async fn execute_download(
     args.push("--no-warnings");
     args.push("--newline");
     args.push("--progress");
-    args.push("--add-metadata");
     args.push("--embed-thumbnail");
     args.push("--sponsorblock-remove");
     args.push("sponsor");
@@ -599,7 +598,6 @@ pub async fn execute_playlist_download(
         args.push("--no-warnings");
         args.push("--newline");
         args.push("--progress");
-        args.push("--add-metadata");
         args.push("--embed-thumbnail");
         args.push("--sponsorblock-remove");
         args.push("sponsor");

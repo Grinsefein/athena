@@ -1,8 +1,9 @@
 {
+  "id": "/?source=pwa",
   "name": "Athena Pi",
   "short_name": "Athena",
   "description": "Premium Video Downloader",
-  "start_url": "/",
+  "start_url": "/?source=pwa",
   "display": "standalone",
   "background_color": "#0f172a",
   "theme_color": "#434ed1",
@@ -12,13 +13,13 @@
       "src": "/app-icon.png",
       "sizes": "512x512",
       "type": "image/png",
-      "purpose": "any maskable"
+      "purpose": "any"
     },
     {
-      "src": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='25' fill='%23434ed1'/%3E%3Cpath d='M35 30 L35 70 L75 50 Z' fill='white'/%3E%3C/svg%3E",
-      "sizes": "any",
-      "type": "image/svg+xml",
-      "purpose": "any maskable"
+      "src": "/app-icon.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
     }
   ],
   "categories": ["utilities", "productivity"],

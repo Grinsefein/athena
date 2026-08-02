@@ -1,7 +1,6 @@
 ```
 # Rust/Cargo specific
 target/
-Cargo.lock
 
 # Rust toolchain
 .rustup/

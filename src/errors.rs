@@ -299,4 +299,63 @@ mod tests {
         assert_eq!(err1, err2);
         assert_ne!(err1, err3);
     }
+
+    #[test]
+    fn test_generate_icon() {
+        let size = 512;
+        let mut img = image::ImageBuffer::new(size, size);
+        for (x, y, pixel) in img.enumerate_pixels_mut() {
+            let px = x as f32;
+            let py = y as f32;
+
+            let r = 120.0;
+            let pad = 20.0;
+            let left = pad + r;
+            let right = size as f32 - pad - r;
+            let top = pad + r;
+            let bottom = size as f32 - pad - r;
+
+            let inside = if px < pad || px > size as f32 - pad || py < pad || py > size as f32 - pad {
+                false
+            } else if px < left && py < top {
+                (px - left).powi(2) + (py - top).powi(2) <= r.powi(2)
+            } else if px > right && py < top {
+                (px - right).powi(2) + (py - top).powi(2) <= r.powi(2)
+            } else if px < left && py > bottom {
+                (px - left).powi(2) + (py - bottom).powi(2) <= r.powi(2)
+            } else if px > right && py > bottom {
+                (px - right).powi(2) + (py - bottom).powi(2) <= r.powi(2)
+            } else {
+                true
+            };
+
+            if inside {
+                let v1 = (179.0, 153.0);
+                let v2 = (179.0, 358.0);
+                let v3 = (384.0, 256.0);
+
+                let sign = |p1: (f32, f32), p2: (f32, f32), p3: (f32, f32)| {
+                    (p1.0 - p3.0) * (p2.1 - p3.1) - (p2.0 - p3.0) * (p1.1 - p3.1)
+                };
+
+                let d1 = sign((px, py), v1, v2);
+                let d2 = sign((px, py), v2, v3);
+                let d3 = sign((px, py), v3, v1);
+
+                let has_neg = (d1 < 0.0) || (d2 < 0.0) || (d3 < 0.0);
+                let has_pos = (d1 > 0.0) || (d2 > 0.0) || (d3 > 0.0);
+
+                let inside_triangle = !(has_neg && has_pos);
+
+                if inside_triangle {
+                    *pixel = image::Rgb([255u8, 255u8, 255u8]);
+                } else {
+                    *pixel = image::Rgb([67u8, 78u8, 209u8]);
+                }
+            } else {
+                *pixel = image::Rgb([15u8, 23u8, 42u8]);
+            }
+        }
+        img.save("app-icon.png").unwrap();
+    }
 }

@@ -12,7 +12,6 @@ use once_cell::sync::Lazy;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::{
-    borrow::Cow,
     collections::HashMap,
     path::PathBuf,
     process::Stdio,
@@ -137,11 +136,44 @@ struct AnalyzeResponse {
     formats: Vec<FormatInfo>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 struct FormatInfo {
+    media_type: String,
     format: String,
     quality: String,
     label: String,
+}
+
+fn get_audio_multiplier(acodec: &str, ext: &str) -> f64 {
+    let lower_acodec = acodec.to_lowercase();
+    let lower_ext = ext.to_lowercase();
+    if lower_acodec.contains("opus") || lower_ext.contains("opus") {
+        1.4
+    } else if lower_acodec.contains("aac") || lower_acodec.contains("mp4a") || lower_ext.contains("m4a") {
+        1.1
+    } else if lower_acodec.contains("vorbis") || lower_ext.contains("ogg") {
+        1.0
+    } else if lower_acodec.contains("mp3") || lower_ext.contains("mp3") {
+        0.8
+    } else {
+        0.7
+    }
+}
+
+fn map_audio_format_name(acodec: &str, ext: &str) -> String {
+    let lower_acodec = acodec.to_lowercase();
+    let lower_ext = ext.to_lowercase();
+    if lower_acodec.contains("opus") || lower_ext.contains("opus") {
+        "opus".to_string()
+    } else if lower_acodec.contains("aac") || lower_acodec.contains("mp4a") || lower_ext.contains("m4a") {
+        "m4a".to_string()
+    } else if lower_acodec.contains("mp3") || lower_ext.contains("mp3") {
+        "mp3".to_string()
+    } else if lower_acodec.contains("flac") || lower_ext.contains("flac") {
+        "flac".to_string()
+    } else {
+        ext.to_string()
+    }
 }
 
 #[derive(Serialize)]
@@ -378,48 +410,101 @@ async fn analyze_video(
     let duration_rem = duration_secs % 60;
     let duration = format!("{}:{:02}", duration_mins, duration_rem);
 
-    // Extract formats with pre-allocated collections
-    let mut video_formats = Vec::with_capacity(4);
-    let mut audio_formats = Vec::with_capacity(1);
-    let mut seen_qualities = std::collections::HashSet::with_capacity(8);
+    let mut parsed_video_formats = Vec::new();
+    let mut seen_video = std::collections::HashSet::new();
+
+    let mut parsed_audio_formats = Vec::new();
+    let mut seen_audio = std::collections::HashSet::new();
 
     if let Some(formats) = info.get("formats").and_then(|f| f.as_array()) {
         for fmt in formats {
             let vcodec = fmt.get("vcodec").and_then(|v| v.as_str()).unwrap_or("none");
             let acodec = fmt.get("acodec").and_then(|a| a.as_str()).unwrap_or("none");
-            let resolution = fmt.get("resolution").and_then(|r| r.as_str()).unwrap_or("unknown");
             let ext = fmt.get("ext").and_then(|e| e.as_str()).unwrap_or("unknown");
 
-            if vcodec != "none" && resolution != "unknown" {
-                // Use a stack buffer for the key to avoid heap allocation
-                let key = format!("{}-{}", resolution, ext);
-                if seen_qualities.insert(key) {
-                    video_formats.push(FormatInfo {
-                        format: String::from(ext),
-                        quality: String::from(resolution),
-                        label: format!("{} ({})", resolution, ext),
-                    });
-                    if video_formats.len() >= 4 {
-                        break;
-                    }
-                }
+            if ext == "mhtml" || ext == "unknown" {
+                continue;
             }
 
-            // Only add audio format once
-            if acodec != "none" && vcodec == "none" && audio_formats.is_empty() {
-                audio_formats.push(FormatInfo {
-                    format: String::from("mp3"),
-                    quality: String::from("best"),
-                    label: String::from("MP3 Audio (Best)"),
-                });
+            if vcodec != "none" {
+                let height = fmt.get("height").and_then(|h| h.as_u64()).unwrap_or(0);
+                if height > 0 {
+                    let key = (height, ext.to_string());
+                    if seen_video.insert(key) {
+                        parsed_video_formats.push((height, ext.to_string()));
+                    }
+                }
+            } else if acodec != "none" {
+                let format_id = fmt.get("format_id").and_then(|id| id.as_str()).unwrap_or("unknown");
+                if format_id != "unknown" {
+                    let abr = fmt.get("abr").and_then(|a| a.as_f64())
+                        .or_else(|| fmt.get("tbr").and_then(|t| t.as_f64()))
+                        .unwrap_or(0.0);
+
+                    let mapped_format = map_audio_format_name(acodec, ext);
+                    let multiplier = get_audio_multiplier(acodec, ext);
+                    let perceived_score = abr * multiplier;
+
+                    let key = (mapped_format.clone(), format_id.to_string());
+                    if seen_audio.insert(key) {
+                        parsed_audio_formats.push((format_id.to_string(), mapped_format, abr, perceived_score));
+                    }
+                }
             }
         }
     }
 
-    // Combine formats efficiently
-    let mut all_formats = Vec::with_capacity(video_formats.len() + audio_formats.len());
-    all_formats.extend(video_formats);
-    all_formats.extend(audio_formats);
+    // Sort video formats descending by height, then by ext (mp4 first, etc.)
+    parsed_video_formats.sort_by(|a, b| {
+        b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1))
+    });
+
+    // Sort audio formats descending by perceived score
+    parsed_audio_formats.sort_by(|a, b| {
+        b.3.partial_cmp(&a.3).unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    let mut all_formats = Vec::new();
+
+    // Add Video Beste Qualität first
+    all_formats.push(FormatInfo {
+        media_type: "video".to_string(),
+        format: "mp4/webm".to_string(),
+        quality: "best".to_string(),
+        label: "Beste Qualität (Video)".to_string(),
+    });
+
+    for (height, ext) in parsed_video_formats {
+        all_formats.push(FormatInfo {
+            media_type: "video".to_string(),
+            format: ext.clone(),
+            quality: format!("{}p-{}", height, ext),
+            label: format!("{}p ({})", height, ext),
+        });
+    }
+
+    // Add Audio Beste Qualität first
+    all_formats.push(FormatInfo {
+        media_type: "audio".to_string(),
+        format: "best".to_string(),
+        quality: "best".to_string(),
+        label: "Beste Qualität (Audio)".to_string(),
+    });
+
+    for (format_id, format_name, abr, _) in parsed_audio_formats {
+        let label = if abr > 0.0 {
+            format!("{} (~{:.0} kbps)", format_name.to_uppercase(), abr)
+        } else {
+            format_name.to_uppercase()
+        };
+
+        all_formats.push(FormatInfo {
+            media_type: "audio".to_string(),
+            format: format_name,
+            quality: format_id,
+            label,
+        });
+    }
 
     let description = info.get("description")
         .and_then(|d| d.as_str())
@@ -607,41 +692,53 @@ async fn execute_download(
         .and_then(|t| t.as_str())
         .unwrap_or("download");
 
-    let ext = if format_type == "mp3" { "mp3" } else { format_type };
-    let _file_name = format!("{}.{}", sanitize_filename(title), ext);
+    let _file_name = format!("{}.{}", sanitize_filename(title), "mp4");
 
-    // Build format string with minimal allocations
-    let format_arg = if format_type == "mp3" {
-        Cow::Borrowed("bestaudio/best")
-    } else if quality == "best" {
-        Cow::Owned(format!("best[ext={}]/best", format_type))
+    let mut args = Vec::new();
+    args.push("--quiet");
+    args.push("--no-warnings");
+    args.push("--newline");
+    args.push("--progress");
+
+    let format_arg;
+    let mut extract_audio = false;
+
+    if format_type == "audio" {
+        extract_audio = true;
+        if quality == "best" {
+            format_arg = "bestaudio/best".to_string();
+        } else {
+            format_arg = quality.to_string();
+        }
     } else {
-        let height: String = quality.chars().filter(|c| c.is_ascii_digit()).collect();
-        Cow::Owned(format!("best[height<={}][ext={}]/best[height<={}]/best", height, format_type, height))
-    };
+        // video
+        if quality == "best" {
+            format_arg = "bestvideo+bestaudio/best".to_string();
+        } else {
+            let parts: Vec<&str> = quality.split('-').collect();
+            if parts.len() == 2 {
+                let height_str: String = parts[0].chars().filter(|c| c.is_ascii_digit()).collect();
+                let ext = parts[1];
+                format_arg = format!("bestvideo[height<={}][ext={}]+bestaudio/bestvideo[height<={}]+bestaudio/best", height_str, ext, height_str);
+            } else {
+                format_arg = "bestvideo+bestaudio/best".to_string();
+            }
+        }
+    }
+
+    args.push("-f");
+    args.push(&format_arg);
 
     // Use download_id in output template to reliably find the file later
-    // yt-dlp will create: {title}-{id}.{ext} which we can match by the unique ID
     let output_template = DOWNLOAD_DIR.join(format!("%(title)s-[{}].%(ext)s", download_id));
     let output_template_str = output_template.to_str().ok_or("Invalid output path")?;
+    args.push("-o");
+    args.push(output_template_str);
 
-    // Pre-allocate vec to avoid reallocations
-    let mut args = Vec::with_capacity(12);
-    args.extend_from_slice(&[
-        "--quiet",
-        "--no-warnings",
-        "--newline",
-        "--progress",
-        "-f", &format_arg,
-        "-o", output_template_str,
-    ]);
-
-    if format_type == "mp3" {
+    if extract_audio {
         args.push("--extract-audio");
         args.push("--audio-format");
-        args.push("mp3");
-        args.push("--audio-quality");
-        args.push("192K");
+        args.push("best");
     }
 
     args.push(url);
@@ -705,8 +802,8 @@ async fn execute_download(
             while let Ok(Some(entry)) = entries.next_entry().await {
                 let path = entry.path();
                 if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                    // Match files containing our unique download_id marker and having the right extension
-                    if name.contains(&id_marker) && name.ends_with(&format!(".{}", ext)) {
+                    // Match files containing our unique download_id marker and not having temporary extension
+                    if name.contains(&id_marker) && !name.ends_with(".part") && !name.ends_with(".ytdl") {
                         info!("Found downloaded file: {}", name);
                         downloaded_file = Some(path);
                         break;
@@ -1095,6 +1192,22 @@ mod tests {
     }
 
     #[test]
+    fn test_map_audio_format_name() {
+        assert_eq!(map_audio_format_name("opus", "webm"), "opus");
+        assert_eq!(map_audio_format_name("mp4a.40.2", "m4a"), "m4a");
+        assert_eq!(map_audio_format_name("mp3", "mp3"), "mp3");
+        assert_eq!(map_audio_format_name("unknown_codec", "wav"), "wav");
+    }
+
+    #[test]
+    fn test_get_audio_multiplier() {
+        assert_eq!(get_audio_multiplier("opus", "webm"), 1.4);
+        assert_eq!(get_audio_multiplier("mp4a.40.2", "m4a"), 1.1);
+        assert_eq!(get_audio_multiplier("mp3", "mp3"), 0.8);
+        assert_eq!(get_audio_multiplier("unknown_codec", "wav"), 0.7);
+    }
+
+    #[test]
     fn test_progress_regex_matches() {
         let test_cases = vec![
             ("[download]  50.5%", Some("50.5")),
@@ -1174,11 +1287,13 @@ mod tests {
     #[test]
     fn test_format_info_serialization() {
         let info = FormatInfo {
+            media_type: "video".to_string(),
             format: "mp4".to_string(),
             quality: "1080p".to_string(),
             label: "1080p (mp4)".to_string(),
         };
         let json = serde_json::to_string(&info).unwrap();
+        assert!(json.contains("\"media_type\":\"video\""));
         assert!(json.contains("\"format\":\"mp4\""));
         assert!(json.contains("\"quality\":\"1080p\""));
         assert!(json.contains("\"label\":\"1080p"));

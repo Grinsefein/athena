@@ -456,15 +456,9 @@ async fn trigger_ytdlp_update(
         });
     }
     
-    // Run update check internally using pip3 (for pip-installed yt-dlp)
-    let update_result = Command::new("pip3")
-        .args([
-            "install",
-            "--upgrade",
-            "--quiet",
-            "--break-system-packages",
-            "yt-dlp"
-        ])
+    // Run update check internally using yt-dlp's built-in self-updater
+    let update_result = Command::new("yt-dlp")
+        .args(["-U"])
         .output()
         .await;
 
@@ -472,7 +466,7 @@ async fn trigger_ytdlp_update(
         Ok(result) if result.status.success() => {
             let stdout = String::from_utf8_lossy(&result.stdout);
             
-            if stdout.contains("Requirement already satisfied") || stdout.is_empty() {
+            if stdout.contains("up to date") || stdout.is_empty() {
                 info!("yt-dlp update check: already current");
                 Ok(Json(ApiResponse {
                     success: true,
@@ -1002,15 +996,9 @@ fn sanitize_filename(name: &str) -> String {
 async fn update_yt_dlp() {
     info!("Checking for yt-dlp updates...");
     
-    // Try pip3 upgrade first (for pip-installed yt-dlp in Docker)
-    let output = Command::new("pip3")
-        .args([
-            "install",
-            "--upgrade",
-            "--quiet",
-            "--break-system-packages",
-            "yt-dlp"
-        ])
+    // Use yt-dlp's built-in self-updater
+    let output = Command::new("yt-dlp")
+        .args(["-U"])
         .output()
         .await;
     
@@ -1020,7 +1008,7 @@ async fn update_yt_dlp() {
             let stderr = String::from_utf8_lossy(&result.stderr);
             
             if result.status.success() {
-                if stdout.contains("Requirement already satisfied") || stdout.is_empty() {
+                if stdout.contains("up to date") || stdout.is_empty() {
                     info!("yt-dlp is already up to date");
                 } else {
                     info!("yt-dlp updated successfully");
@@ -1030,7 +1018,7 @@ async fn update_yt_dlp() {
             }
         }
         Err(e) => {
-            warn!("Failed to run pip3 install --upgrade yt-dlp: {}", e);
+            warn!("Failed to run yt-dlp -U: {}", e);
         }
     }
 }

@@ -18,9 +18,9 @@ A unified Rust-based video downloader with embedded Alpine.js frontend. Download
 - yt-dlp installed on system
 - ffmpeg (for audio extraction)
 
-## Host-Only Installation & Setup (Non-Docker)
+## Installation & Setup
 
-Athena Pi is fully optimized to run natively on your Linux host (such as a Raspberry Pi or any Linux server) instead of using Docker. Running natively on the host has several advantages: smaller resource footprint, faster startup times, and direct access to system storage and resources.
+Athena Pi runs natively on your Linux host (such as a Raspberry Pi or any Linux server). Running natively on the host has several advantages: smaller resource footprint, faster startup times, and direct access to system storage and resources.
 
 We have provided a `Makefile` and helper scripts to automate the entire installation and daemonization process.
 
@@ -30,7 +30,7 @@ Athena Pi requires `ffmpeg` and `yt-dlp` to download and process videos. You can
 ```bash
 sudo make install-deps
 ```
-*Note: This script will install `ffmpeg`, `python3`, `pip`, and upgrade to the latest version of `yt-dlp`.*
+*Note: This script will install `ffmpeg` and the latest standalone `yt-dlp` binary (updatable via `yt-dlp -U`).*
 
 ### 2. Quick Setup
 Run the quick setup command to copy the template configuration file (`.env.example` to `.env`) and build the application in debug mode:
@@ -72,23 +72,6 @@ Once installed, you can manage the Athena Pi service with standard `systemctl` c
 - **Start service**: `sudo systemctl start athena`
 - **Restart service**: `sudo systemctl restart athena`
 - **View logs**: `journalctl -u athena -f`
-
----
-
-## Alternative: Docker Deployment
-
-If you still prefer to run Athena Pi inside a Docker container, you can use the provided Docker configurations.
-
-### Docker Compose
-To build and start the service with docker-compose:
-```bash
-docker-compose up -d --build
-```
-
-### Multi-Architecture Support (ARM64/Raspberry Pi) using Docker Buildx
-```bash
-docker buildx build --platform linux/amd64,linux/arm64 -t your-username/athena-pi:latest --push .
-```
 
 ---
 

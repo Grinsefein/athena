@@ -1,7 +1,7 @@
 # Athena Pi - Makefile for Host-Only (Native) Setup and Development
 # This Makefile manages dependencies, compilation, running, and systemd service installation.
 
-.PHONY: help build release run dev test clean watch lint fmt install-deps setup-service quick-setup dev-server check
+.PHONY: help build release run dev test clean watch lint fmt install-deps setup-service update-service remove-service quick-setup dev-server check
 
 help:
 	@echo ""
@@ -28,6 +28,8 @@ help:
 	@echo "$(GREEN)🚀 Installation & Deployment:$(NC)"
 	@echo "  make install-deps     Install system dependencies"
 	@echo "  make setup-service    Install systemd service (auto-start on reboot)"
+	@echo "  make update-service   Rebuild and update the installed service"
+	@echo "  sudo make remove-service   Remove the installed service"
 	@echo ""
 	@echo "$(GREEN)🐹 Cross-Compilation:$(NC)"
 	@echo "  make cross-build-arm64   Cross-compile for ARM64 (Raspberry Pi)"
@@ -45,6 +47,12 @@ help:
 	@echo "  # Production deployment on Linux"
 	@echo "  make release"
 	@echo "  sudo make setup-service"
+	@echo ""
+	@echo "  # Update the installed service after changes"
+	@echo "  make update-service"
+	@echo ""
+	@echo "  # Remove the installed service"
+	@echo "  sudo make remove-service"
 	@echo ""
 	@echo "  # Build for Raspberry Pi"
 	@echo "  make cross-build-arm64"
@@ -112,6 +120,22 @@ setup-service:
 	@echo "Installing systemd service with auto-start on reboot..."
 	@chmod +x scripts/install-systemd.sh
 	@./scripts/install-systemd.sh
+
+update-service:
+	@echo "Building optimized release binary..."
+	@cargo build --release
+	@echo "Updating the installed service..."
+	@chmod +x scripts/update-systemd.sh
+	@./scripts/update-systemd.sh
+
+remove-service:
+	@if [ "$$(id -u)" != "0" ]; then \
+		echo "This target requires root. Run: sudo make remove-service"; \
+		exit 1; \
+	fi
+	@echo "Removing systemd service..."
+	@chmod +x scripts/remove-systemd.sh
+	@./scripts/remove-systemd.sh
 
 # Cross-compilation targets
 cross-build-arm64:

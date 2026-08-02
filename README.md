@@ -73,6 +73,18 @@ Once installed, you can manage the Athena Pi service with standard `systemctl` c
 - **Restart service**: `sudo systemctl restart athena`
 - **View logs**: `journalctl -u athena -f`
 
+### Updating the Service
+After pulling new code, rebuild and reinstall the service (also updates yt-dlp):
+```bash
+make update-service
+```
+
+### Removing the Service
+To fully uninstall Athena Pi (service, binary, config, and the `athena` user):
+```bash
+sudo make remove-service
+```
+
 ---
 
 ## Configuration

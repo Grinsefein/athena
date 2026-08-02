@@ -126,6 +126,24 @@
             from { opacity: 1; transform: translate(-50%, 0); }
             to { opacity: 0; transform: translate(-50%, 20px); }
         }
+
+        /* Best stamp ribbon */
+        .best-stamp {
+            position: absolute;
+            top: 4px;
+            right: -18px;
+            background-color: #f59e0b; /* amber-500 */
+            color: white;
+            font-size: 7px;
+            font-weight: 900;
+            padding: 1px 0;
+            width: 58px;
+            transform: rotate(45deg);
+            text-align: center;
+            box-shadow: 0 1px 2px rgba(0,0,0,0.15);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
     </style>
 </head>
 <body class="h-full bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 selection:bg-brand-100 dark:selection:bg-brand-900/30"
@@ -219,21 +237,21 @@
         </div>
     </div>
 
-    <main class="min-h-full flex flex-col items-center justify-center p-6">
+    <main class="min-h-full flex flex-col items-center justify-center p-4 sm:p-6">
         <div class="w-full max-w-xl">
             
             <!-- Header -->
-            <div class="text-center mb-12">
-                <div class="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-brand-600 text-white mb-6 shadow-xl shadow-brand-500/20 ring-1 ring-brand-500/50">
-                    <svg class="w-8 h-8 ml-1" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+            <div class="text-center mb-8 sm:mb-12">
+                <div class="inline-flex items-center justify-center w-14 h-14 sm:w-16 sm:h-16 rounded-2xl bg-brand-600 text-white mb-4 sm:mb-6 shadow-xl shadow-brand-500/20 ring-1 ring-brand-500/50">
+                    <svg class="w-7 h-7 sm:w-8 sm:h-8 ml-1" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
                 </div>
-                <h1 class="text-4xl font-extrabold tracking-tight text-slate-900 dark:text-white">Athena Pi</h1>
-                <p class="text-slate-500 dark:text-slate-400 mt-3 font-medium">Einfach, schnell, zuverlässig.</p>
+                <h1 class="text-3xl sm:text-4xl font-extrabold tracking-tight text-slate-900 dark:text-white">Athena Pi</h1>
+                <p class="text-slate-500 dark:text-slate-400 mt-2 sm:mt-3 font-medium">Einfach, schnell, zuverlässig.</p>
             </div>
 
             <!-- Main Card -->
-            <div class="bg-white dark:bg-slate-900 rounded-[2rem] shadow-xl border border-slate-200 dark:border-slate-800">
-                <div class="p-8 sm:p-10">
+            <div class="bg-white dark:bg-slate-900 rounded-2xl sm:rounded-[2rem] shadow-xl border border-slate-200 dark:border-slate-800">
+                <div class="p-4 sm:p-10">
                     
                     <!-- URL Input -->
                     <div class="relative">
@@ -241,19 +259,20 @@
                             type="url" 
                             x-model="url"
                             @keydown.enter="analyze()"
+                            @paste="handlePaste($event)"
                             placeholder="Video-Link hier einfügen..."
-                            class="w-full pl-6 pr-16 py-5 rounded-2xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 outline-none transition-all text-lg font-medium"
+                            class="w-full pl-4 sm:pl-6 pr-12 sm:pr-16 py-3.5 sm:py-5 rounded-xl sm:rounded-2xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 outline-none transition-all text-sm sm:text-lg font-medium"
                             :disabled="loading"
                         >
                         <button 
                             @click="analyze()"
                             :disabled="!url || loading"
-                            class="absolute right-3 top-3 bottom-3 px-4 rounded-xl bg-brand-600 hover:bg-brand-700 text-white transition-all disabled:opacity-50"
+                            class="absolute right-2 top-2 bottom-2 px-3 sm:px-4 rounded-lg sm:rounded-xl bg-brand-600 hover:bg-brand-700 text-white transition-all disabled:opacity-50"
                         >
-                            <svg x-show="!loading" class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <svg x-show="!loading" class="w-5 h-5 sm:w-6 sm:h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M14 5l7 7m0 0l-7 7m7-7H3"/>
                             </svg>
-                            <svg x-show="loading" class="animate-spin w-5 h-5" fill="none" viewBox="0 0 24 24">
+                            <svg x-show="loading" class="animate-spin w-4 h-4 sm:w-5 sm:h-5" fill="none" viewBox="0 0 24 24">
                                 <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                                 <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"/>
                             </svg>
@@ -261,55 +280,74 @@
                     </div>
 
                     <!-- Error State -->
-                    <div x-show="error" x-transition class="mt-6 p-4 rounded-xl bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-600 dark:text-red-400 text-sm font-semibold text-center" x-text="error" x-cloak></div>
+                    <div x-show="error" x-transition class="mt-4 sm:mt-6 p-4 rounded-xl bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-600 dark:text-red-400 text-sm font-semibold text-center" x-text="error" x-cloak></div>
 
                     <!-- Result Section -->
-                    <div x-show="videoInfo" x-transition:enter="transition ease-out duration-300" class="mt-10 space-y-8" x-cloak>
+                    <div x-show="videoInfo" x-transition:enter="transition ease-out duration-300" class="mt-6 sm:mt-10 space-y-6 sm:space-y-8" x-cloak>
                         
                         <!-- Media Card with Blur Background -->
-                        <div class="relative overflow-hidden flex flex-col sm:flex-row items-center gap-6 p-5 rounded-2xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-800">
+                        <div class="relative overflow-hidden flex flex-row items-center gap-4 sm:gap-6 p-3 sm:p-5 rounded-xl sm:rounded-2xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-800">
                             <div class="thumbnail-blur-bg" :style="`background-image: url('${videoInfo?.thumbnail}')`"></div>
-                            <img :src="videoInfo?.thumbnail" class="relative w-32 h-24 rounded-lg object-cover shadow-sm bg-slate-200 dark:bg-slate-800 ring-1 ring-white/20">
-                            <div class="relative text-center sm:text-left min-w-0 flex-1">
-                                <h3 x-text="videoInfo?.title" class="text-lg font-bold leading-tight truncate"></h3>
-                                <p x-text="videoInfo?.author" class="text-slate-500 dark:text-slate-400 mt-1 font-medium"></p>
-                                <p x-show="videoInfo?.duration" class="text-xs text-slate-400 dark:text-slate-500 mt-2 font-medium" x-text="formatDuration(videoInfo?.duration)"></p>
+                            <img :src="videoInfo?.thumbnail" class="relative w-24 h-18 sm:w-32 sm:h-24 rounded-lg object-cover shadow-sm bg-slate-200 dark:bg-slate-800 ring-1 ring-white/20 shrink-0">
+                            <div class="relative text-left min-w-0 flex-1">
+                                <h3 x-text="videoInfo?.title" class="text-sm sm:text-lg font-bold leading-snug sm:leading-tight truncate"></h3>
+                                <p x-text="videoInfo?.author" class="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-0.5 sm:mt-1 font-medium truncate"></p>
+                                <p x-show="videoInfo?.duration" class="text-[10px] sm:text-xs text-slate-400 dark:text-slate-500 mt-1 sm:mt-2 font-medium" x-text="formatDuration(videoInfo?.duration)"></p>
                             </div>
                         </div>
 
                         <!-- Config Grid -->
-                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
                             
                             <!-- Segmented Control for Format -->
                             <div class="sm:col-span-2">
                                 <label class="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-2 ml-1">Format</label>
-                                <div class="segmented-control flex">
+                                <div class="segmented-control flex animate-fade-in">
                                     <div class="segmented-indicator w-1/2" :style="`transform: translateX(${format === 'audio' ? '100%' : '0%'})`"></div>
-                                    <button @click="format = 'video'; quality = 'best'" class="flex-1 py-3.5 text-sm font-bold transition-colors" :class="format === 'video' ? 'text-brand-700 dark:text-brand-600 font-extrabold' : 'text-slate-500 dark:text-slate-400'">Video</button>
-                                    <button @click="format = 'audio'; quality = 'best'" class="flex-1 py-3.5 text-sm font-bold transition-colors" :class="format === 'audio' ? 'text-brand-700 dark:text-brand-600 font-extrabold' : 'text-slate-500 dark:text-slate-400'">Audio</button>
+                                    <button @click="selectDefaultQuality('video')" class="flex-1 py-3.5 text-sm font-bold transition-colors" :class="format === 'video' ? 'text-brand-700 dark:text-brand-600 font-extrabold' : 'text-slate-500 dark:text-slate-400'">Video</button>
+                                    <button @click="selectDefaultQuality('audio')" class="flex-1 py-3.5 text-sm font-bold transition-colors" :class="format === 'audio' ? 'text-brand-700 dark:text-brand-600 font-extrabold' : 'text-slate-500 dark:text-slate-400'">Audio</button>
                                 </div>
                             </div>
 
                             <!-- Quality Grid with Filesize -->
                             <div class="sm:col-span-2">
                                 <label class="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-2 ml-1">Qualität wählen</label>
-                                <div class="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                                    <template x-for="fmt in getFilteredFormats()">
+                                <div class="grid grid-cols-2 sm:grid-cols-3 gap-2 sm:gap-3">
+                                    <template x-for="(fmt, idx) in getVisibleFormats()">
                                         <button @click="quality = fmt.quality"
-                                                class="flex flex-col items-center justify-center p-4 rounded-2xl border text-center transition-all duration-200 quality-card cursor-pointer"
+                                                class="relative overflow-hidden flex flex-col items-center justify-center py-2.5 px-3 sm:p-4 rounded-xl sm:rounded-2xl border text-center transition-all duration-200 quality-card cursor-pointer min-h-[70px] sm:min-h-[90px]"
                                                 :class="quality === fmt.quality
                                                     ? 'bg-brand-600 text-white border-brand-600 shadow-lg shadow-brand-500/20 scale-[1.02] font-bold'
                                                     : 'bg-slate-50 dark:bg-slate-800/40 hover:bg-slate-100 dark:hover:bg-slate-800 border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 font-medium'">
-                                            <span class="text-sm block" x-text="fmt.label"></span>
-                                            <span x-show="fmt.filesize" class="text-xs mt-1 opacity-80" x-text="fmt.filesize"></span>
+
+                                            <!-- Dynamic BEST ⭐ Stamp -->
+                                            <template x-if="idx === 0">
+                                                <div class="absolute top-0 right-0 w-12 h-12 pointer-events-none overflow-hidden">
+                                                    <div class="best-stamp">Best ⭐</div>
+                                                </div>
+                                            </template>
+
+                                            <span class="text-xs sm:text-sm block pr-3" :class="idx === 0 ? 'font-bold' : ''" x-text="fmt.label + (idx === 0 ? ' ⭐' : '')"></span>
+                                            <span x-show="fmt.filesize" class="text-[10px] sm:text-xs mt-1 opacity-80" x-text="fmt.filesize"></span>
                                         </button>
                                     </template>
+                                </div>
+
+                                <!-- Expand/Collapse Button -->
+                                <div x-show="getFilteredFormats().length > 3" class="text-center mt-3" x-cloak>
+                                    <button @click="toggleExpanded()"
+                                            class="inline-flex items-center gap-1.5 text-xs font-bold text-brand-600 dark:text-brand-400 hover:text-brand-700 dark:hover:text-brand-300 transition-colors">
+                                        <span x-text="isExpanded() ? 'Weniger Formate anzeigen' : 'Mehr Formate anzeigen'"></span>
+                                        <svg class="w-4 h-4 transition-transform duration-200" :class="isExpanded() ? 'rotate-180' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M19 9l-7 7-7-7"/>
+                                        </svg>
+                                    </button>
                                 </div>
                             </div>
                         </div>
 
                         <!-- Playlist Selection Section -->
-                        <div x-show="videoInfo?.playlist_videos && videoInfo?.playlist_videos.length > 0" x-transition class="p-6 rounded-2xl bg-slate-50 dark:bg-slate-800/30 border border-slate-200 dark:border-slate-800 space-y-4" x-cloak>
+                        <div x-show="videoInfo?.playlist_videos && videoInfo?.playlist_videos.length > 0" x-transition class="p-4 sm:p-6 rounded-xl sm:rounded-2xl bg-slate-50 dark:bg-slate-800/30 border border-slate-200 dark:border-slate-800 space-y-3 sm:space-y-4" x-cloak>
                             <div class="flex items-center justify-between">
                                 <h4 class="text-sm font-bold uppercase tracking-wider text-slate-400">Wähle Videos aus der Playlist</h4>
                                 <div class="flex gap-2">
@@ -410,6 +448,9 @@
                 updateStatus: null,
                 toasts: [],
                 selectedPlaylistUrls: [],
+                videoExpanded: false,
+                audioExpanded: false,
+                debounceTimeout: null,
 
                 selectAllPlaylist(val) {
                     if (val && this.videoInfo && this.videoInfo.playlist_videos) {
@@ -439,7 +480,40 @@
 
                 getFilteredFormats() {
                     if (!this.videoInfo || !this.videoInfo.formats) return [];
-                    return this.videoInfo.formats.filter(f => f.media_type === this.format);
+                    // Filter out hardcoded generic "best" options to use dynamic highest quality formats instead
+                    return this.videoInfo.formats.filter(f => f.media_type === this.format && f.quality !== 'best');
+                },
+
+                getVisibleFormats() {
+                    const fmts = this.getFilteredFormats();
+                    const isExpanded = this.format === 'video' ? this.videoExpanded : this.audioExpanded;
+                    if (isExpanded) {
+                        return fmts;
+                    } else {
+                        return fmts.slice(0, 3); // 1 row (3 formats maximum)
+                    }
+                },
+
+                isExpanded() {
+                    return this.format === 'video' ? this.videoExpanded : this.audioExpanded;
+                },
+
+                toggleExpanded() {
+                    if (this.format === 'video') {
+                        this.videoExpanded = !this.videoExpanded;
+                    } else {
+                        this.audioExpanded = !this.audioExpanded;
+                    }
+                },
+
+                selectDefaultQuality(fmtType) {
+                    this.format = fmtType;
+                    const formats = this.videoInfo ? this.videoInfo.formats.filter(f => f.media_type === fmtType && f.quality !== 'best') : [];
+                    if (formats.length > 0) {
+                        this.quality = formats[0].quality;
+                    } else {
+                        this.quality = 'best';
+                    }
                 },
 
                 getSelectedQualityLabel() {
@@ -448,8 +522,17 @@
                     return found ? found.label : 'Beste Qualität';
                 },
 
-                formatDuration(seconds) {
-                    if (!seconds) return '';
+                formatDuration(val) {
+                    if (!val) return '';
+                    if (typeof val === 'string' && val.includes(':')) {
+                        const parts = val.split(':');
+                        if (parts.length > 2) {
+                            return val + ' Std.';
+                        }
+                        return val + ' Min.';
+                    }
+                    const seconds = parseInt(val, 10);
+                    if (isNaN(seconds)) return '';
                     const h = Math.floor(seconds / 3600);
                     const m = Math.floor((seconds % 3600) / 60);
                     const s = seconds % 60;
@@ -457,6 +540,27 @@
                         return `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')} Std.`;
                     }
                     return `${m}:${s.toString().padStart(2, '0')} Min.`;
+                },
+
+                isValidUrl(str) {
+                    try {
+                        const url = new URL(str);
+                        return url.protocol === 'http:' || url.protocol === 'https:';
+                    } catch (_) {
+                        return false;
+                    }
+                },
+
+                handlePaste(event) {
+                    const pastedText = (event.clipboardData || window.clipboardData).getData('text');
+                    if (pastedText) {
+                        this.url = pastedText;
+                        if (this.isValidUrl(pastedText)) {
+                            this.$nextTick(() => {
+                                this.analyze();
+                            });
+                        }
+                    }
                 },
 
                 async init() {
@@ -473,6 +577,21 @@
                     
                     // Config Check
                     await this.checkConfig();
+
+                    // Smart debounced watch for typed URLs
+                    this.$watch('url', value => {
+                        if (!value) return;
+                        if (this.isValidUrl(value)) {
+                            if (this.debounceTimeout) {
+                                clearTimeout(this.debounceTimeout);
+                            }
+                            this.debounceTimeout = setTimeout(() => {
+                                if (!this.loading && (!this.videoInfo || this.videoInfo.url !== this.cleanUrl(value))) {
+                                    this.analyze();
+                                }
+                            }, 800);
+                        }
+                    });
                 },
 
                 async checkConfig() {
@@ -560,6 +679,10 @@
                         const data = await response.json();
                         if (!data.success) throw new Error(data.error || 'Fehlgeschlagen');
                         this.videoInfo = data.data;
+
+                        // Set the default format & quality to the highest dynamic format instead of hardcoded 'best'
+                        this.selectDefaultQuality('video');
+
                         if (this.videoInfo && this.videoInfo.playlist_videos) {
                             this.selectedPlaylistUrls = this.videoInfo.playlist_videos.map(v => v.url);
                         } else {

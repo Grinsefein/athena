@@ -187,18 +187,17 @@
                                 <button @click="open = !open" 
                                         class="w-full flex items-center justify-between px-5 py-4 rounded-2xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-brand-500 transition-colors">
                                     <div class="flex items-center gap-3">
-                                        <svg x-show="format === 'mp3'" class="w-5 h-5 text-brand-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3"/></svg>
-                                        <svg x-show="format !== 'mp3'" class="w-5 h-5 text-brand-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
-                                        <span class="font-bold" x-text="format === 'mp3' ? 'Audio (MP3)' : (format === 'webm' ? 'Video (WebM)' : 'Video (MP4)')"></span>
+                                        <svg x-show="format === 'audio'" class="w-5 h-5 text-brand-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3"/></svg>
+                                        <svg x-show="format !== 'audio'" class="w-5 h-5 text-brand-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
+                                        <span class="font-bold" x-text="format === 'audio' ? 'Audio' : 'Video'"></span>
                                     </div>
                                     <svg class="w-5 h-5 text-slate-400 transition-transform" :class="open ? 'rotate-180' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M19 9l-7 7-7-7"/></svg>
                                 </button>
                                 
                                 <div x-show="open" @click.away="open = false" 
                                      class="absolute z-20 w-full mt-2 p-2 bg-white dark:bg-slate-800 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-700 max-h-72 overflow-y-auto" x-cloak>
-                                    <button @click="format = 'mp4'; open = false" class="w-full flex items-center px-4 py-3 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-700/50 font-medium transition-colors" :class="format === 'mp4' ? 'text-brand-600' : ''">Video (MP4)</button>
-                                    <button @click="format = 'webm'; open = false" class="w-full flex items-center px-4 py-3 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-700/50 font-medium transition-colors" :class="format === 'webm' ? 'text-brand-600' : ''">Video (WebM)</button>
-                                    <button @click="format = 'mp3'; open = false" class="w-full flex items-center px-4 py-3 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-700/50 font-medium transition-colors" :class="format === 'mp3' ? 'text-brand-600' : ''">Audio (MP3)</button>
+                                    <button @click="format = 'video'; quality = 'best'; open = false" class="w-full flex items-center px-4 py-3 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-700/50 font-medium transition-colors" :class="format === 'video' ? 'text-brand-600' : ''">Video</button>
+                                    <button @click="format = 'audio'; quality = 'best'; open = false" class="w-full flex items-center px-4 py-3 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-700/50 font-medium transition-colors" :class="format === 'audio' ? 'text-brand-600' : ''">Audio</button>
                                 </div>
                             </div>
 
@@ -209,15 +208,14 @@
                                         class="w-full flex items-center justify-between px-5 py-4 rounded-2xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:border-brand-500 transition-colors">
                                     <div class="flex items-center gap-3">
                                         <svg class="w-5 h-5 text-brand-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
-                                        <span class="font-bold" x-text="quality === 'best' ? 'Beste Qualität' : quality"></span>
+                                        <span class="font-bold" x-text="getSelectedQualityLabel()"></span>
                                     </div>
                                     <svg class="w-5 h-5 text-slate-400 transition-transform" :class="open ? 'rotate-180' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M19 9l-7 7-7-7"/></svg>
                                 </button>
                                 
                                 <div x-show="open" @click.away="open = false" 
                                      class="absolute z-20 w-full mt-2 p-2 bg-white dark:bg-slate-800 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-700 max-h-72 overflow-y-auto" x-cloak>
-                                    <button @click="quality = 'best'; open = false" class="w-full text-left px-4 py-3 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-700/50 font-medium transition-colors" :class="quality === 'best' ? 'text-brand-600' : ''">Beste Qualität</button>
-                                    <template x-for="fmt in videoInfo?.formats || []">
+                                    <template x-for="fmt in getFilteredFormats()">
                                         <button @click="quality = fmt.quality; open = false" class="w-full text-left px-4 py-3 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-700/50 font-medium transition-colors" :class="quality === fmt.quality ? 'text-brand-600' : ''" x-text="fmt.label"></button>
                                     </template>
                                 </div>
@@ -269,7 +267,7 @@
         function athenaApp() {
             return {
                 url: '',
-                format: 'mp4',
+                format: 'video',
                 quality: 'best',
                 loading: false,
                 downloading: false,
@@ -290,6 +288,17 @@
                 eventSource: null,
                 checkingUpdate: false,
                 updateStatus: null,
+
+                getFilteredFormats() {
+                    if (!this.videoInfo || !this.videoInfo.formats) return [];
+                    return this.videoInfo.formats.filter(f => f.media_type === this.format);
+                },
+
+                getSelectedQualityLabel() {
+                    if (!this.videoInfo || !this.videoInfo.formats) return 'Beste Qualität';
+                    const found = this.videoInfo.formats.find(f => f.media_type === this.format && f.quality === this.quality);
+                    return found ? found.label : 'Beste Qualität';
+                },
 
                 async init() {
                     // Dark Mode
@@ -490,7 +499,7 @@
                 reset() {
                     this.url = '';
                     this.videoInfo = null;
-                    this.format = 'mp4';
+                    this.format = 'video';
                     this.quality = 'best';
                     this.downloading = false;
                     this.completed = false;

@@ -122,9 +122,6 @@ setup-service:
 	@./scripts/install-systemd.sh
 
 update-service:
-	@echo "Building optimized release binary..."
-	@cargo build --release
-	@echo "Updating the installed service..."
 	@chmod +x scripts/update-systemd.sh
 	@./scripts/update-systemd.sh
 

@@ -74,7 +74,7 @@ Once installed, you can manage the Athena Pi service with standard `systemctl` c
 - **View logs**: `journalctl -u athena -f`
 
 ### Updating the Service
-After pulling new code, rebuild and reinstall the service (also updates yt-dlp):
+After pulling new code, rebuild from source and reinstall the service (also updates yt-dlp). Run it as a normal (non-root) user — the script uses sudo only where needed:
 ```bash
 make update-service
 ```

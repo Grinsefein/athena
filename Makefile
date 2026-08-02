@@ -1,4 +1,7 @@
-.PHONY: help build release run dev test clean watch lint fmt install-deps setup-service cross-build-arm64 cross-build-armv7 quick-setup dev-server check
+# Athena Pi - Makefile for Host-Only (Native) Setup and Development
+# This Makefile manages dependencies, compilation, running, and systemd service installation.
+
+.PHONY: help build release run dev test clean watch lint fmt install-deps setup-service quick-setup dev-server check
 
 help:
 	@echo ""

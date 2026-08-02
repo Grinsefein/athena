@@ -755,7 +755,7 @@ async fn progress_stream(
     State(state): State<SharedState>,
     headers: axum::http::HeaderMap,
     Path(download_id): Path<String>,
-    Query(params): Query<StdHashMap<String, String>>,
+    Query(params): Query<HashMap<String, String>>,
 ) -> Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>> {
     let query_token = params.get("token").map(|s| s.as_str());
     let authenticated = is_authenticated(&headers, query_token, &state).await;
@@ -828,7 +828,7 @@ async fn download_file(
     State(state): State<SharedState>,
     headers: axum::http::HeaderMap,
     Path(download_id): Path<String>,
-    Query(params): Query<StdHashMap<String, String>>,
+    Query(params): Query<HashMap<String, String>>,
 ) -> AppResult<Response> {
     let query_token = params.get("token").map(|s| s.as_str());
     

@@ -1,5 +1,5 @@
 # --- Stage 1: Builder ---
-FROM --platform=$BUILDPLATFORM rust:1.85-slim-bookworm AS builder
+FROM --platform=$BUILDPLATFORM rust:slim-bookworm AS builder
 WORKDIR /app
 
 # Install build dependencies
@@ -9,17 +9,18 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Step A: Cache dependencies
-COPY Cargo.toml Cargo.lock ./
+COPY Cargo.toml Cargo.lock* ./
 RUN mkdir src && echo "fn main() {}" > src/main.rs
-# Create a dummy frontend.html so include_str! doesn't fail during dependency caching
 RUN touch frontend.html 
-RUN cargo build --release
-RUN rm -f target/release/deps/athena*
+
+# Generiere Cargo.lock falls nicht vorhanden und baue nur die Dependencies
+RUN cargo build --release || true
 
 # Step B: Build actual source
 COPY frontend.html .
 COPY src ./src
-RUN cargo build --release
+# Touch main.rs damit Cargo merkt, dass der Quellcode neu ist
+RUN touch src/main.rs && cargo build --release
 
 # --- Stage 2: Runtime ---
 FROM debian:bookworm-slim

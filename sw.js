@@ -1,31 +1,68 @@
-const CACHE_NAME = 'athena-pi-v1';
-const ASSETS = [
+const CACHE_NAME = 'athena-pi-v2';
+const CORE_ASSETS = [
   '/',
   '/manifest.json',
-  '/app-icon.png'
+  '/app-icon.png',
+  'https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js'
 ];
 
 self.addEventListener('install', event => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then(cache => {
-      return cache.addAll(ASSETS).catch(err => console.log("Assets caching failed: ", err));
-    })
+    caches.open(CACHE_NAME)
+      .then(cache => cache.addAll(CORE_ASSETS))
+      .then(() => self.skipWaiting())
+      .catch(err => console.warn('Precache failed:', err))
   );
 });
 
 self.addEventListener('activate', event => {
-  event.waitUntil(self.clients.claim());
+  event.waitUntil(
+    caches.keys()
+      .then(keys => Promise.all(
+        keys.filter(key => key !== CACHE_NAME).map(key => caches.delete(key))
+      ))
+      .then(() => self.clients.claim())
+  );
 });
 
 self.addEventListener('fetch', event => {
-  // Only intercept GET requests, and skip external APIs / sse progress streams
-  if (event.request.method !== 'GET' || event.request.url.includes('/api/')) {
+  const { request } = event;
+
+  if (request.method !== 'GET') return;
+
+  const url = new URL(request.url);
+
+  if (url.origin === self.location.origin && url.pathname.startsWith('/api/')) {
     return;
   }
 
+  // Navigation requests: network first, fall back to cached shell when offline
+  if (request.mode === 'navigate') {
+    event.respondWith(
+      fetch(request)
+        .then(response => {
+          const copy = response.clone();
+          caches.open(CACHE_NAME).then(cache => cache.put('/', copy));
+          return response;
+        })
+        .catch(() => caches.match('/'))
+    );
+    return;
+  }
+
+  // Static assets (same-origin + CDN): stale-while-revalidate
   event.respondWith(
-    caches.match(event.request).then(cachedResponse => {
-      return cachedResponse || fetch(event.request);
-    }).catch(() => fetch(event.request))
+    caches.match(request).then(cached => {
+      const refresh = fetch(request)
+        .then(response => {
+          if (response && (response.ok || response.type === 'opaque')) {
+            const copy = response.clone();
+            caches.open(CACHE_NAME).then(cache => cache.put(request, copy));
+          }
+          return response;
+        })
+        .catch(() => cached);
+      return cached || refresh;
+    })
   );
 });

@@ -2,393 +2,883 @@
 <html lang="de" class="h-full">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="description" content="Athena Pi - Einfacher, schneller Video-Downloader">
     <title>Athena Pi</title>
-    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
-    <script src="https://cdn.tailwindcss.com"></script>
     <script>
-        tailwind.config = {
-            darkMode: 'class',
-            theme: {
-                extend: {
-                    fontFamily: {
-                        sans: ['Inter', 'system-ui', 'sans-serif'],
-                    },
-                    colors: {
-                        brand: {
-                            50: '#f5f7ff',
-                            100: '#ebf0fe',
-                            200: '#dae3fd',
-                            300: '#bdccfa',
-                            400: '#94a9f5',
-                            500: '#6d81f0',
-                            600: '#5261e6',
-                            700: '#434ed1',
-                            800: '#3a42ab',
-                            900: '#343a88',
-                            950: '#22254f',
-                        },
-                    }
-                }
-            }
-        }
+        (function () {
+            var stored = localStorage.getItem('darkMode');
+            var dark = stored === 'true' || (stored === null && window.matchMedia('(prefers-color-scheme: dark)').matches);
+            if (dark) document.documentElement.classList.add('dark');
+        })();
     </script>
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Crect width='100' height='100' rx='25' fill='%23434ed1'/%3E%3Cpath d='M35 30 L35 70 L75 50 Z' fill='white'/%3E%3C/svg%3E">
+    <link rel="apple-touch-icon" href="/app-icon.png">
     <link rel="manifest" href="/manifest.json">
-    <meta name="theme-color" content="#434ed1">
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#eef2ff">
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#020617">
+    <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="Athena Pi">
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
     <script>
         if ('serviceWorker' in navigator) {
             window.addEventListener('load', () => {
-                navigator.serviceWorker.register('/sw.js')
-                    .then(reg => console.log('Service Worker registered', reg))
-                    .catch(err => console.error('Service Worker registration failed', err));
+                navigator.serviceWorker.register('/sw.js').catch(() => {});
             });
         }
     </script>
     <style>
+        :root {
+            --brand-400: #94a9f5;
+            --brand-500: #6d81f0;
+            --brand-600: #5261e6;
+            --brand-700: #434ed1;
+            --brand-glow: rgba(82, 97, 230, 0.45);
+            --bg: #f8fafc;
+            --bg-accent: rgba(109, 129, 240, 0.10);
+            --surface: #ffffff;
+            --surface-2: #f1f5f9;
+            --surface-3: #e2e8f0;
+            --border: #e2e8f0;
+            --border-strong: #cbd5e1;
+            --text: #0f172a;
+            --muted: #64748b;
+            --faint: #94a3b8;
+            --danger-bg: #fef2f2;
+            --danger-border: #fecaca;
+            --danger-text: #dc2626;
+            --success: #059669;
+            --shadow-card: 0 16px 48px -16px rgba(15, 23, 42, 0.18);
+            --shadow-pop: 0 12px 32px -10px var(--brand-glow);
+            --r-md: 12px;
+            --r-lg: 16px;
+            --r-xl: 24px;
+            --safe-top: env(safe-area-inset-top, 0px);
+            --safe-bottom: env(safe-area-inset-bottom, 0px);
+            color-scheme: light;
+        }
+        html.dark {
+            --bg-accent: rgba(82, 97, 230, 0.07);
+            --bg: #020617;
+            --surface: #0f172a;
+            --surface-2: #16213a;
+            --surface-3: #1e293b;
+            --border: #1e293b;
+            --border-strong: #334155;
+            --text: #f1f5f9;
+            --muted: #94a3b8;
+            --faint: #64748b;
+            --danger-bg: rgba(127, 29, 29, 0.22);
+            --danger-border: rgba(185, 28, 28, 0.45);
+            --danger-text: #fb7185;
+            --success: #34d399;
+            --shadow-card: 0 16px 48px -16px rgba(0, 0, 0, 0.6);
+            color-scheme: dark;
+        }
+
+        *, *::before, *::after { box-sizing: border-box; }
         [x-cloak] { display: none !important; }
-        .glass-card { 
-            backdrop-filter: blur(12px); 
-            -webkit-backdrop-filter: blur(12px); 
+
+        html { height: 100%; }
+        body {
+            margin: 0;
+            min-height: 100vh;
+            min-height: 100dvh;
+            font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            background:
+                radial-gradient(1100px 500px at 50% -10%, var(--bg-accent), transparent 70%),
+                var(--bg);
+            color: var(--text);
+            line-height: 1.5;
+            -webkit-font-smoothing: antialiased;
+            transition: background-color 0.25s ease, color 0.25s ease;
         }
-        .progress-bar { transition: width 0.3s ease-out; }
-        
-        /* Custom Scrollbar */
-        ::-webkit-scrollbar { width: 6px; }
-        ::-webkit-scrollbar-track { background: transparent; }
-        ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 10px; }
-        .dark ::-webkit-scrollbar-thumb { background: #475569; }
-        
-        /* Segmented Control Animation */
-        .segmented-control {
-            position: relative;
-            background: rgba(148, 169, 245, 0.1);
+        ::selection { background: rgba(109, 129, 240, 0.3); }
+
+        button { font: inherit; color: inherit; }
+        a { color: inherit; }
+
+        button, input, [role="button"] {
+            touch-action: manipulation;
+            -webkit-tap-highlight-color: transparent;
+        }
+        button:focus-visible, input:focus-visible, a:focus-visible {
+            outline: 2px solid var(--brand-500);
+            outline-offset: 2px;
+        }
+
+        .shell {
+            min-height: 100vh;
+            min-height: 100dvh;
+            display: flex;
+            flex-direction: column;
+            padding: calc(var(--safe-top) + 4.5rem) 1rem calc(var(--safe-bottom) + 1.25rem);
+        }
+        @media (min-width: 640px) {
+            .shell { padding-top: calc(var(--safe-top) + 4.75rem); padding-bottom: calc(var(--safe-bottom) + 2rem); }
+        }
+        .wrap { width: 100%; max-width: 36rem; margin: auto; }
+
+        /* ---------- Top bar ---------- */
+        .topbar {
+            position: fixed;
+            top: calc(var(--safe-top) + 0.75rem);
+            right: 0.875rem;
+            display: flex;
+            gap: 0.5rem;
+            z-index: 40;
+        }
+        .icon-btn {
+            width: 44px;
+            height: 44px;
             border-radius: 14px;
-            padding: 4px;
+            border: 1px solid var(--border);
+            background: var(--surface);
+            color: var(--muted);
+            display: grid;
+            place-items: center;
+            cursor: pointer;
+            box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
+            transition: background-color 0.15s ease, color 0.15s ease, transform 0.1s ease;
         }
-        .segmented-control button {
+        .icon-btn:hover { background: var(--surface-2); color: var(--text); }
+        .icon-btn:active { transform: scale(0.94); }
+        .icon-btn:disabled { opacity: 0.55; cursor: default; transform: none; }
+        .icon-btn svg { width: 20px; height: 20px; }
+
+        /* ---------- Hero header ---------- */
+        .hero { text-align: center; margin-bottom: clamp(1.5rem, 4vw, 2.75rem); }
+        .logo-badge {
+            width: clamp(56px, 9vw, 64px);
+            height: clamp(56px, 9vw, 64px);
+            border-radius: 18px;
+            background: linear-gradient(135deg, var(--brand-500), var(--brand-700));
+            color: #fff;
+            display: inline-grid;
+            place-items: center;
+            box-shadow: var(--shadow-pop), inset 0 1px 0 rgba(255, 255, 255, 0.25);
+            margin-bottom: 1rem;
+        }
+        .logo-badge svg { width: 46%; height: 46%; margin-left: 6%; }
+        .hero h1 {
+            margin: 0;
+            font-size: clamp(1.7rem, 3vw + 1rem, 2.25rem);
+            font-weight: 800;
+            letter-spacing: -0.02em;
+        }
+        .tagline { margin: 0.4rem 0 0; color: var(--muted); font-weight: 500; font-size: clamp(0.9rem, 1.5vw, 1rem); }
+
+        /* ---------- Card ---------- */
+        .card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--r-xl);
+            box-shadow: var(--shadow-card);
+            transition: background-color 0.25s ease, border-color 0.25s ease;
+        }
+        .card-body { padding: 1.25rem; }
+        @media (min-width: 640px) { .card-body { padding: 2.5rem; } }
+
+        /* ---------- URL input ---------- */
+        .input-row { position: relative; }
+        .url-input {
+            width: 100%;
+            padding: 0.95rem 3.6rem 0.95rem 1rem;
+            border-radius: var(--r-lg);
+            border: 1px solid var(--border);
+            background: var(--surface-2);
+            color: var(--text);
+            font-size: 0.95rem;
+            font-weight: 500;
+            appearance: none;
+            outline: none;
+            transition: border-color 0.15s ease, box-shadow 0.15s ease, background-color 0.25s ease;
+        }
+        .url-input::placeholder { color: var(--faint); }
+        .url-input:focus { border-color: var(--brand-500); box-shadow: 0 0 0 4px rgba(109, 129, 240, 0.18); }
+        .url-input:disabled { opacity: 0.6; }
+        @media (min-width: 640px) {
+            .url-input { font-size: 1.0625rem; padding: 1.15rem 4.2rem 1.15rem 1.5rem; }
+        }
+        .go-btn {
+            position: absolute;
+            top: 0.4rem;
+            right: 0.4rem;
+            bottom: 0.4rem;
+            min-width: 44px;
+            padding: 0 0.85rem;
+            border: none;
+            border-radius: 11px;
+            background: var(--brand-600);
+            color: #fff;
+            display: grid;
+            place-items: center;
+            cursor: pointer;
+            transition: background-color 0.15s ease, transform 0.1s ease;
+        }
+        .go-btn:hover:not(:disabled) { background: var(--brand-700); }
+        .go-btn:active:not(:disabled) { transform: scale(0.94); }
+        .go-btn:disabled { opacity: 0.45; cursor: default; }
+        .go-btn svg { width: 20px; height: 20px; }
+        @media (min-width: 640px) { .go-btn svg { width: 22px; height: 22px; } }
+
+        /* ---------- Spinner ---------- */
+        .spin {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            border: 2.5px solid currentColor;
+            border-top-color: transparent;
+            opacity: 0.85;
+            animation: rot 0.7s linear infinite;
+        }
+        .spin.sm { width: 16px; height: 16px; border-width: 2px; }
+        @keyframes rot { to { transform: rotate(360deg); } }
+
+        /* ---------- Alerts / reveal animation ---------- */
+        .alert-error {
+            margin-top: 1rem;
+            padding: 0.9rem 1rem;
+            border-radius: var(--r-md);
+            background: var(--danger-bg);
+            border: 1px solid var(--danger-border);
+            color: var(--danger-text);
+            font-size: 0.875rem;
+            font-weight: 600;
+            text-align: center;
+            overflow-wrap: anywhere;
+        }
+        .reveal { animation: reveal 0.35s cubic-bezier(0.2, 0.7, 0.3, 1) both; }
+        @keyframes reveal {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: none; }
+        }
+
+        .result { margin-top: clamp(1.5rem, 4vw, 2.5rem); display: flex; flex-direction: column; gap: clamp(1.25rem, 3vw, 2rem); }
+
+        /* ---------- Media card ---------- */
+        .media {
+            position: relative;
+            display: flex;
+            align-items: center;
+            gap: 0.9rem;
+            padding: 0.75rem;
+            border-radius: var(--r-lg);
+            background: var(--surface-2);
+            border: 1px solid var(--border);
+            overflow: hidden;
+        }
+        @media (min-width: 640px) { .media { gap: 1.25rem; padding: 1.1rem; } }
+        .media-blur {
+            position: absolute;
+            inset: -20px;
+            background-size: cover;
+            background-position: center;
+            filter: blur(28px) saturate(1.2);
+            opacity: 0.25;
+        }
+        html.dark .media-blur { opacity: 0.18; }
+        .thumb {
             position: relative;
             z-index: 1;
-            transition: color 0.2s ease;
+            width: 104px;
+            aspect-ratio: 16 / 9;
+            border-radius: 10px;
+            object-fit: cover;
+            flex-shrink: 0;
+            background: var(--surface-3);
+            box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+        }
+        @media (min-width: 640px) { .thumb { width: 140px; } }
+        .media-info { position: relative; z-index: 1; min-width: 0; }
+        .media-title {
+            margin: 0;
+            font-size: 0.95rem;
+            font-weight: 700;
+            line-height: 1.35;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .media-author, .media-duration {
+            margin: 0.15rem 0 0;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .media-author { font-size: 0.8125rem; color: var(--muted); font-weight: 500; }
+        .media-duration { font-size: 0.6875rem; color: var(--faint); font-weight: 500; }
+        @media (min-width: 640px) {
+            .media-title { font-size: 1.125rem; }
+            .media-author { font-size: 0.875rem; }
+            .media-duration { font-size: 0.75rem; }
+        }
+
+        /* ---------- Section label ---------- */
+        .label {
+            display: block;
+            font-size: 0.6875rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: var(--faint);
+            margin: 0 0 0.5rem 0.125rem;
+        }
+
+        /* ---------- Segmented control ---------- */
+        .segmented {
+            position: relative;
+            display: flex;
+            padding: 4px;
+            border-radius: 14px;
+            background: var(--surface-2);
+            border: 1px solid var(--border);
         }
         .segmented-indicator {
             position: absolute;
             top: 4px;
             bottom: 4px;
-            background: white;
+            left: 4px;
+            width: calc(50% - 4px);
             border-radius: 10px;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+            background: var(--surface);
+            box-shadow: 0 1px 4px rgba(15, 23, 42, 0.15);
             transition: transform 0.25s cubic-bezier(0.4, 0, 0.2, 1);
         }
-        .dark .segmented-indicator {
-            background: #1e293b;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+        html.dark .segmented-indicator { background: var(--surface-3); }
+        .segmented button {
+            position: relative;
+            z-index: 1;
+            flex: 1;
+            min-height: 44px;
+            border: none;
+            background: transparent;
+            border-radius: 10px;
+            font-size: 0.875rem;
+            font-weight: 700;
+            color: var(--muted);
+            cursor: pointer;
+            transition: color 0.2s ease;
         }
-        
-        /* Quality Grid Card */
-        .quality-card {
-            transition: all 0.2s ease;
-        }
-        .quality-card:hover {
-            transform: translateY(-2px);
-        }
-        .quality-card.selected {
-            ring: 2px;
-        }
-        
-        /* Thumbnail Background Blur */
-        .thumbnail-blur-bg {
-            position: absolute;
-            inset: 0;
-            background-size: cover;
-            background-position: center;
-            filter: blur(20px);
-            opacity: 0.3;
-            transform: scale(1.1);
-        }
-        
-        /* Toast Animations */
-        .toast-enter {
-            animation: toastEnter 0.3s ease-out forwards;
-        }
-        .toast-exit {
-            animation: toastExit 0.3s ease-in forwards;
-        }
-        @keyframes toastEnter {
-            from { opacity: 0; transform: translate(-50%, 20px); }
-            to { opacity: 1; transform: translate(-50%, 0); }
-        }
-        @keyframes toastExit {
-            from { opacity: 1; transform: translate(-50%, 0); }
-            to { opacity: 0; transform: translate(-50%, 20px); }
-        }
+        .segmented button[aria-pressed="true"] { color: var(--brand-700); }
+        html.dark .segmented button[aria-pressed="true"] { color: var(--brand-400); }
 
-        /* Best stamp ribbon */
+        /* ---------- Quality grid ---------- */
+        .quality-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0.5rem; }
+        @media (min-width: 480px) { .quality-grid { grid-template-columns: repeat(3, 1fr); gap: 0.65rem; } }
+        .q-card {
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 2px;
+            min-height: 64px;
+            padding: 0.5rem 0.75rem;
+            border-radius: 14px;
+            border: 1px solid var(--border);
+            background: var(--surface-2);
+            color: var(--text);
+            text-align: center;
+            cursor: pointer;
+            overflow: hidden;
+            transition: transform 0.15s ease, background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+        }
+        @media (min-width: 480px) { .q-card { min-height: 84px; border-radius: var(--r-lg); } }
+        .q-card:hover { background: var(--surface-3); border-color: var(--border-strong); }
+        .q-card:active { transform: scale(0.97); }
+        .q-card.active {
+            background: var(--brand-600);
+            border-color: var(--brand-600);
+            color: #fff;
+            box-shadow: 0 10px 26px -8px var(--brand-glow);
+            transform: translateY(-1px);
+        }
+        .q-name { font-size: 0.8125rem; font-weight: 650; overflow-wrap: anywhere; }
+        .q-card.active .q-name { font-weight: 800; }
+        .q-size { font-size: 0.6875rem; opacity: 0.75; }
         .best-stamp {
             position: absolute;
-            top: 4px;
-            right: -18px;
-            background-color: #f59e0b; /* amber-500 */
-            color: white;
-            font-size: 7px;
-            font-weight: 900;
-            padding: 1px 0;
-            width: 58px;
+            top: 8px;
+            right: -19px;
+            width: 64px;
+            padding: 2px 0;
             transform: rotate(45deg);
-            text-align: center;
-            box-shadow: 0 1px 2px rgba(0,0,0,0.15);
+            background: #f59e0b;
+            color: #fff;
+            font-size: 8px;
+            font-weight: 900;
+            letter-spacing: 0.06em;
             text-transform: uppercase;
-            letter-spacing: 0.05em;
+            text-align: center;
+            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+        }
+        .expand-row { text-align: center; margin-top: 0.75rem; }
+        .expand-btn {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.3rem;
+            min-height: 44px;
+            padding: 0 0.75rem;
+            border: none;
+            background: transparent;
+            color: var(--brand-600);
+            font-size: 0.8125rem;
+            font-weight: 700;
+            cursor: pointer;
+            border-radius: var(--r-md);
+            transition: color 0.15s ease;
+        }
+        html.dark .expand-btn { color: var(--brand-400); }
+        .expand-btn:hover { color: var(--brand-700); }
+        .expand-btn svg { width: 16px; height: 16px; transition: transform 0.2s ease; }
+        .expand-btn svg.open { transform: rotate(180deg); }
+
+        /* ---------- Playlist panel ---------- */
+        .playlist-panel {
+            padding: 1rem;
+            border-radius: var(--r-lg);
+            background: var(--surface-2);
+            border: 1px solid var(--border);
+        }
+        @media (min-width: 640px) { .playlist-panel { padding: 1.5rem; } }
+        .playlist-head { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; margin-bottom: 0.75rem; }
+        .playlist-head h4 { margin: 0; font-size: 0.75rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+        .playlist-actions { display: flex; gap: 0.6rem; align-items: center; flex-shrink: 0; }
+        .link-btn {
+            border: none;
+            background: transparent;
+            padding: 0.25rem 0.15rem;
+            font-size: 0.75rem;
+            font-weight: 700;
+            color: var(--brand-600);
+            cursor: pointer;
+            border-radius: 6px;
+        }
+        html.dark .link-btn { color: var(--brand-400); }
+        .link-btn.muted { color: var(--muted); }
+        .playlist-list { max-height: 15rem; overflow-y: auto; display: flex; flex-direction: column; gap: 0.25rem; padding-right: 0.35rem; }
+        .playlist-item {
+            display: flex;
+            align-items: flex-start;
+            gap: 0.7rem;
+            padding: 0.6rem 0.65rem;
+            border-radius: var(--r-md);
+            border: 1px solid transparent;
+            cursor: pointer;
+            transition: background-color 0.15s ease, border-color 0.15s ease;
+        }
+        .playlist-item:hover { background: var(--surface-3); border-color: var(--border); }
+        .playlist-item input {
+            margin-top: 0.2rem;
+            width: 18px;
+            height: 18px;
+            accent-color: var(--brand-600);
+            flex-shrink: 0;
+        }
+        .playlist-item span { font-size: 0.875rem; font-weight: 600; line-height: 1.35; user-select: none; }
+        .playlist-count { margin: 0.6rem 0 0; text-align: right; font-size: 0.75rem; font-weight: 600; color: var(--muted); }
+
+        /* ---------- Download button ---------- */
+        .dl-btn {
+            position: relative;
+            width: 100%;
+            min-height: 58px;
+            padding: 0.75rem 1rem;
+            border: none;
+            border-radius: var(--r-lg);
+            background: var(--brand-600);
+            color: #fff;
+            font-size: 1rem;
+            font-weight: 700;
+            overflow: hidden;
+            cursor: pointer;
+            box-shadow: 0 14px 30px -10px var(--brand-glow);
+            transition: background-color 0.15s ease, transform 0.1s ease, box-shadow 0.2s ease;
+        }
+        .dl-btn:hover:not(:disabled) { background: var(--brand-700); }
+        .dl-btn:active:not(:disabled) { transform: scale(0.99); }
+        .dl-btn:disabled { background: var(--surface-2); color: var(--faint); cursor: not-allowed; box-shadow: none; }
+        .dl-progress {
+            position: absolute;
+            inset: 0;
+            background: rgba(255, 255, 255, 0.16);
+            transform-origin: left center;
+            transition: width 0.3s ease-out;
+        }
+        .dl-content { position: relative; z-index: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0.2rem; }
+        .dl-main { display: flex; align-items: center; gap: 0.6rem; }
+        .dl-main svg { width: 21px; height: 21px; }
+        .dl-sub { display: flex; align-items: center; gap: 0.4rem; font-size: 0.75rem; font-weight: 550; opacity: 0.85; }
+        .done-icon { color: var(--success); }
+
+        /* ---------- Completion actions ---------- */
+        .actions { display: grid; grid-template-columns: 1fr; gap: 0.75rem; padding-top: 0.25rem; }
+        @media (min-width: 480px) { .actions { grid-template-columns: 1fr 1fr; } }
+        .btn-save, .btn-ghost {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+            min-height: 54px;
+            padding: 0 1.25rem;
+            border-radius: var(--r-lg);
+            font-weight: 700;
+            font-size: 0.9375rem;
+            text-decoration: none;
+            cursor: pointer;
+            transition: background-color 0.15s ease, transform 0.1s ease;
+        }
+        .btn-save, .btn-ghost { border: none; }
+        .btn-save { background: var(--success); color: #fff; box-shadow: 0 12px 26px -10px rgba(5, 150, 105, 0.5); }
+        .btn-save:hover { background: #047857; }
+        .btn-ghost { background: var(--surface-2); color: var(--text); border: 1px solid var(--border); }
+        .btn-ghost:hover { background: var(--surface-3); }
+        .btn-save:active, .btn-ghost:active { transform: scale(0.98); }
+        .btn-save svg, .btn-ghost svg { width: 18px; height: 18px; flex-shrink: 0; }
+
+        /* ---------- Toasts ---------- */
+        .toasts {
+            position: fixed;
+            bottom: calc(var(--safe-bottom) + 1.25rem);
+            left: 50%;
+            transform: translateX(-50%);
+            width: min(calc(100vw - 2rem), 24rem);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 0.6rem;
+            z-index: 60;
+            pointer-events: none;
+        }
+        .toast {
+            pointer-events: auto;
+            width: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.9rem;
+            padding: 0.85rem 1.1rem;
+            border-radius: var(--r-lg);
+            border: 1px solid transparent;
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            color: #fff;
+            font-size: 0.875rem;
+            font-weight: 600;
+            box-shadow: 0 18px 40px -12px rgba(0, 0, 0, 0.45);
+        }
+        .toast.info { background: rgba(15, 23, 42, 0.92); border-color: rgba(255, 255, 255, 0.08); }
+        .toast.error { background: rgba(225, 29, 72, 0.94); border-color: rgba(255, 255, 255, 0.15); }
+        .toast.success { background: rgba(5, 150, 105, 0.94); border-color: rgba(255, 255, 255, 0.15); }
+        .toast-body { display: flex; align-items: center; gap: 0.65rem; min-width: 0; }
+        .toast-body svg { width: 18px; height: 18px; flex-shrink: 0; }
+        .toast-msg { overflow-wrap: anywhere; }
+        .toast-close {
+            border: none;
+            background: transparent;
+            color: #fff;
+            opacity: 0.65;
+            cursor: pointer;
+            padding: 0.35rem;
+            display: grid;
+            place-items: center;
+            border-radius: 8px;
+        }
+        .toast-close:hover { opacity: 1; }
+        .toast-close svg { width: 14px; height: 14px; }
+
+        /* ---------- Login modal ---------- */
+        .modal-overlay {
+            position: fixed;
+            inset: 0;
+            z-index: 100;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 1rem;
+            padding-top: max(1rem, var(--safe-top));
+            background: rgba(2, 6, 23, 0.6);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+        }
+        .modal {
+            width: 100%;
+            max-width: 24rem;
+            max-height: 100%;
+            overflow-y: auto;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--r-xl);
+            box-shadow: var(--shadow-card);
+            padding: 2rem;
+        }
+        .modal-head { text-align: center; margin-bottom: 1.75rem; }
+        .modal-logo {
+            width: 56px;
+            height: 56px;
+            border-radius: 16px;
+            background: var(--brand-600);
+            color: #fff;
+            display: inline-grid;
+            place-items: center;
+            margin-bottom: 1.25rem;
+        }
+        .modal-head h2 { margin: 0; font-size: 1.375rem; font-weight: 800; letter-spacing: -0.01em; }
+        .modal-head p { margin: 0.5rem 0 0; color: var(--muted); font-size: 0.9rem; }
+        .modal-form { display: flex; flex-direction: column; gap: 1rem; }
+        .pw-input {
+            width: 100%;
+            padding: 1rem 1.15rem;
+            border-radius: var(--r-lg);
+            border: 1px solid var(--border-strong);
+            background: var(--surface-2);
+            color: var(--text);
+            font-size: 1rem;
+            outline: none;
+            transition: border-color 0.15s ease, box-shadow 0.15s ease;
+        }
+        .pw-input:focus { border-color: var(--brand-500); box-shadow: 0 0 0 4px rgba(109, 129, 240, 0.18); }
+        .login-btn {
+            min-height: 54px;
+            border: none;
+            border-radius: var(--r-lg);
+            background: var(--brand-600);
+            color: #fff;
+            font-size: 1rem;
+            font-weight: 700;
+            cursor: pointer;
+            box-shadow: var(--shadow-pop);
+            transition: background-color 0.15s ease, transform 0.1s ease;
+        }
+        .login-btn:hover:not(:disabled) { background: var(--brand-700); }
+        .login-btn:active:not(:disabled) { transform: scale(0.98); }
+        .login-btn:disabled { opacity: 0.5; cursor: default; }
+        .login-btn span { display: inline-flex; align-items: center; justify-content: center; gap: 0.5rem; }
+        .login-error { margin: 0.25rem 0 0; text-align: center; font-size: 0.85rem; font-weight: 600; color: var(--danger-text); }
+
+        /* ---------- Footer ---------- */
+        .footer {
+            margin-top: auto;
+            padding-top: 2rem;
+            text-align: center;
+            font-size: 0.8125rem;
+            font-weight: 500;
+            color: var(--faint);
+        }
+
+        /* ---------- Scrollbar ---------- */
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 10px; }
+
+        @media (prefers-reduced-motion: reduce) {
+            *, *::before, *::after {
+                animation-duration: 0.01ms !important;
+                animation-iteration-count: 1 !important;
+                transition-duration: 0.01ms !important;
+                scroll-behavior: auto !important;
+            }
         }
     </style>
 </head>
-<body class="h-full bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 selection:bg-brand-100 dark:selection:bg-brand-900/30"
-      x-data="athenaApp()" x-init="init()">
-    
+<body x-data="athenaApp()" x-init="init()">
+
     <!-- Top Bar Controls -->
-    <div class="fixed top-6 right-6 z-50 flex items-center gap-3">
-        <!-- yt-dlp Update -->
-        <button @click="checkYtdlpUpdate()" 
-                :disabled="checkingUpdate" 
-                class="flex items-center justify-center w-10 h-10 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm hover:bg-slate-50 dark:hover:bg-slate-800 transition-all disabled:opacity-50" 
-                title="yt-dlp aktualisieren">
-            <svg x-show="!checkingUpdate" class="w-5 h-5 text-slate-600 dark:text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <div class="topbar">
+        <button type="button" @click="checkYtdlpUpdate()" :disabled="checkingUpdate" class="icon-btn" aria-label="yt-dlp aktualisieren" title="yt-dlp aktualisieren">
+            <svg x-show="!checkingUpdate" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/>
             </svg>
-            <svg x-show="checkingUpdate" class="animate-spin w-5 h-5 text-brand-600" fill="none" viewBox="0 0 24 24">
-                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"/>
-            </svg>
+            <span class="spin sm" x-show="checkingUpdate" aria-hidden="true"></span>
         </button>
-        <!-- Theme Toggle -->
-        <button @click="toggleTheme()" 
-                class="flex items-center justify-center w-10 h-10 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 shadow-sm hover:bg-slate-50 dark:hover:bg-slate-800 transition-all">
-            <svg x-show="!darkMode" class="w-5 h-5 text-slate-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"/></svg>
-            <svg x-show="darkMode" class="w-5 h-5 text-yellow-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"/></svg>
+        <button type="button" @click="toggleTheme()" class="icon-btn" :aria-label="darkMode ? 'Light Mode aktivieren' : 'Dark Mode aktivieren'" title="Design wechseln">
+            <svg x-show="!darkMode" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"/></svg>
+            <svg x-show="darkMode" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"/></svg>
         </button>
     </div>
 
-    <!-- iOS Toast Notifications System -->
-    <div class="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 flex flex-col gap-3 items-center w-full max-w-sm px-4" x-cloak>
+    <!-- Toast Notifications -->
+    <div class="toasts" role="status" aria-live="polite" x-cloak>
         <template x-for="t in toasts" :key="t.id">
             <div x-show="t.visible"
                  x-transition:enter="transition ease-out duration-300"
-                 x-transition:enter-start="opacity-0 translate-y-4 scale-95"
-                 x-transition:enter-end="opacity-100 translate-y-0 scale-100"
+                 x-transition:enter-start="opacity-0 translate-y-3"
+                 x-transition:enter-end="opacity-100 translate-y-0"
                  x-transition:leave="transition ease-in duration-200"
-                 x-transition:leave-start="opacity-100 translate-y-0 scale-100"
-                 x-transition:leave-end="opacity-0 translate-y-2 scale-95"
-                 :class="t.type === 'error' ? 'bg-rose-600/95 text-white border-rose-500/50 shadow-rose-500/10' : (t.type === 'success' ? 'bg-emerald-600/95 text-white border-emerald-500/50 shadow-emerald-500/10' : 'bg-slate-900/95 dark:bg-slate-900/95 text-white border-slate-800/50')"
-                 class="w-full glass-card px-5 py-3.5 rounded-2xl shadow-2xl flex items-center justify-between gap-4 border">
-                <div class="flex items-center gap-3">
+                 x-transition:leave-start="opacity-100"
+                 x-transition:leave-end="opacity-0 translate-y-2"
+                 class="toast reveal" :class="t.type">
+                <div class="toast-body">
                     <template x-if="t.type === 'error'">
-                        <svg class="w-5 h-5 shrink-0 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
+                        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
                     </template>
                     <template x-if="t.type === 'success'">
-                        <svg class="w-5 h-5 shrink-0 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
                     </template>
                     <template x-if="t.type !== 'error' && t.type !== 'success'">
-                        <svg class="w-5 h-5 shrink-0 text-brand-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                        <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
                     </template>
-                    <span x-text="t.message" class="text-sm font-semibold tracking-wide"></span>
+                    <span class="toast-msg" x-text="t.message"></span>
                 </div>
-                <button @click="dismissToast(t.id)" class="opacity-60 hover:opacity-100 transition-opacity">
-                    <svg class="w-4 h-4 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M6 18L18 6M6 6l12 12"/></svg>
+                <button type="button" class="toast-close" @click="dismissToast(t.id)" aria-label="Benachrichtigung schließen">
+                    <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M6 18L18 6M6 6l12 12"/></svg>
                 </button>
             </div>
         </template>
     </div>
 
     <!-- Login Overlay -->
-    <div x-show="showLogin" x-transition class="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-md" x-cloak>
-        <div class="w-full max-w-sm bg-white dark:bg-slate-900 rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-800 p-8">
-            <div class="text-center mb-8">
-                <div class="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-brand-600 text-white mb-6">
-                    <svg class="w-7 h-7" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 3c1.66 0 3 1.34 3 3s-1.34 3-3 3-3-1.34-3-3 1.34-3 3-3zm0 14.2c-2.5 0-4.71-1.28-6-3.22.03-1.99 4-3.08 6-3.08 1.99 0 5.97 1.09 6 3.08-1.29 1.94-3.5 3.22-6 3.22z"/></svg>
+    <div x-show="showLogin" x-transition.opacity.duration.300ms class="modal-overlay" x-cloak
+         x-effect="if (showLogin) setTimeout(() => $refs.pwInput && $refs.pwInput.focus(), 80)">
+        <div class="modal" role="dialog" aria-modal="true" aria-label="Anmeldung">
+            <div class="modal-head">
+                <div class="modal-logo" aria-hidden="true">
+                    <svg style="width:26px;height:26px;" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 3c1.66 0 3 1.34 3 3s-1.34 3-3 3-3-1.34-3-3 1.34-3 3-3zm0 14.2c-2.5 0-4.71-1.28-6-3.22.03-1.99 4-3.08 6-3.08 1.99 0 5.97 1.09 6 3.08-1.29 1.94-3.5 3.22-6 3.22z"/></svg>
                 </div>
-                <h2 class="text-2xl font-bold">Willkommen zurück</h2>
-                <p class="text-slate-500 dark:text-slate-400 mt-2">Bitte authentifiziere dich.</p>
+                <h2>Willkommen zurück</h2>
+                <p>Bitte authentifiziere dich.</p>
             </div>
-            <div class="space-y-4">
-                <input 
-                    type="password" 
-                    x-model="password"
-                    @keydown.enter="login()"
-                    placeholder="Passwort"
-                    class="w-full px-5 py-4 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 outline-none transition-all"
-                >
-                <button 
-                    @click="login()"
-                    :disabled="!password || loggingIn"
-                    class="w-full py-4 rounded-xl bg-brand-600 text-white font-bold hover:bg-brand-700 active:scale-[0.98] disabled:opacity-50 transition-all shadow-lg shadow-brand-500/20"
-                >
+            <form class="modal-form" @submit.prevent="login()">
+                <input type="password" x-ref="pwInput" x-model="password" autocomplete="current-password"
+                       placeholder="Passwort" aria-label="Passwort" enterkeyhint="go">
+                <button type="submit" :disabled="!password || loggingIn" class="login-btn">
                     <span x-show="!loggingIn">Anmelden</span>
-                    <span x-show="loggingIn" class="flex items-center justify-center gap-2">
-                        <svg class="animate-spin w-5 h-5" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"/></svg>
-                        Wird geladen...
-                    </span>
+                    <span x-show="loggingIn" x-cloak><span class="spin sm"></span> Wird geladen...</span>
                 </button>
-                <p x-show="loginError" x-text="loginError" class="text-center text-sm font-medium text-red-500" x-cloak></p>
-            </div>
+                <p x-show="loginError" x-text="loginError" class="login-error" role="alert" x-cloak></p>
+            </form>
         </div>
     </div>
 
-    <main class="min-h-screen flex flex-col p-4 sm:p-6">
-        <div class="w-full max-w-xl mx-auto my-auto">
-            
+    <main class="shell">
+        <div class="wrap">
+
             <!-- Header -->
-            <div class="text-center mb-8 sm:mb-12">
-                <div class="inline-flex items-center justify-center w-14 h-14 sm:w-16 sm:h-16 rounded-2xl bg-brand-600 text-white mb-4 sm:mb-6 shadow-xl shadow-brand-500/20 ring-1 ring-brand-500/50">
-                    <svg class="w-7 h-7 sm:w-8 sm:h-8 ml-1" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+            <header class="hero">
+                <div class="logo-badge" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
                 </div>
-                <h1 class="text-3xl sm:text-4xl font-extrabold tracking-tight text-slate-900 dark:text-white">Athena Pi</h1>
-                <p class="text-slate-500 dark:text-slate-400 mt-2 sm:mt-3 font-medium">Einfach, schnell, zuverlässig.</p>
-            </div>
+                <h1>Athena Pi</h1>
+                <p class="tagline">Einfach, schnell, zuverlässig.</p>
+            </header>
 
             <!-- Main Card -->
-            <div class="bg-white dark:bg-slate-900 rounded-2xl sm:rounded-[2rem] shadow-xl border border-slate-200 dark:border-slate-800">
-                <div class="p-4 sm:p-10">
-                    
+            <section class="card" aria-label="Video Downloader">
+                <div class="card-body">
+
                     <!-- URL Input -->
-                    <div class="relative">
-                        <input 
-                            type="url" 
-                            x-model="url"
-                            @keydown.enter="analyze()"
-                            @paste="handlePaste($event)"
-                            placeholder="Video-Link hier einfügen..."
-                            class="w-full pl-4 sm:pl-6 pr-12 sm:pr-16 py-3.5 sm:py-5 rounded-xl sm:rounded-2xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 focus:ring-2 focus:ring-brand-500/20 focus:border-brand-500 outline-none transition-all text-sm sm:text-lg font-medium"
-                            :disabled="loading"
-                        >
-                        <button 
-                            @click="analyze()"
-                            :disabled="!url || loading"
-                            class="absolute right-2 top-2 bottom-2 px-3 sm:px-4 rounded-lg sm:rounded-xl bg-brand-600 hover:bg-brand-700 text-white transition-all disabled:opacity-50"
-                        >
-                            <svg x-show="!loading" class="w-5 h-5 sm:w-6 sm:h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <div class="input-row">
+                        <input type="url" class="url-input" x-model="url" @keydown.enter="analyze()"
+                               @paste="handlePaste($event)" placeholder="Video-Link hier einfügen..."
+                               aria-label="Video-URL" inputmode="url" autocapitalize="off" autocorrect="off"
+                               spellcheck="false" enterkeyhint="go" autocomplete="off" :disabled="loading">
+                        <button type="button" class="go-btn" @click="analyze()" :disabled="!url || loading"
+                                aria-label="Video analysieren">
+                            <svg x-show="!loading" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M14 5l7 7m0 0l-7 7m7-7H3"/>
                             </svg>
-                            <svg x-show="loading" class="animate-spin w-4 h-4 sm:w-5 sm:h-5" fill="none" viewBox="0 0 24 24">
-                                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
-                                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"/>
-                            </svg>
+                            <span class="spin sm" x-show="loading" aria-hidden="true" style="color:#fff;"></span>
                         </button>
                     </div>
 
                     <!-- Error State -->
-                    <div x-show="error" x-transition class="mt-4 sm:mt-6 p-4 rounded-xl bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-600 dark:text-red-400 text-sm font-semibold text-center" x-text="error" x-cloak></div>
+                    <div x-show="error" x-transition.opacity class="alert-error reveal" role="alert" x-text="error" x-cloak></div>
 
                     <!-- Result Section -->
-                    <div x-show="videoInfo" x-transition:enter="transition ease-out duration-300" class="mt-6 sm:mt-10 space-y-6 sm:space-y-8" x-cloak>
-                        
-                        <!-- Media Card with Blur Background -->
-                        <div class="relative overflow-hidden flex flex-row items-center gap-4 sm:gap-6 p-3 sm:p-5 rounded-xl sm:rounded-2xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-800">
-                            <div class="thumbnail-blur-bg" :style="`background-image: url('${videoInfo?.thumbnail}')`"></div>
-                            <img :src="videoInfo?.thumbnail" class="relative w-24 h-18 sm:w-32 sm:h-24 rounded-lg object-cover shadow-sm bg-slate-200 dark:bg-slate-800 ring-1 ring-white/20 shrink-0">
-                            <div class="relative text-left min-w-0 flex-1">
-                                <h3 x-text="videoInfo?.title" class="text-sm sm:text-lg font-bold leading-snug sm:leading-tight truncate"></h3>
-                                <p x-text="videoInfo?.author" class="text-xs sm:text-sm text-slate-500 dark:text-slate-400 mt-0.5 sm:mt-1 font-medium truncate"></p>
-                                <p x-show="videoInfo?.duration" class="text-[10px] sm:text-xs text-slate-400 dark:text-slate-500 mt-1 sm:mt-2 font-medium" x-text="formatDuration(videoInfo?.duration)"></p>
+                    <div x-show="videoInfo" class="result reveal" x-cloak>
+
+                        <!-- Media Card -->
+                        <div class="media">
+                            <div class="media-blur" :style="videoInfo?.thumbnail ? `background-image:url('${videoInfo.thumbnail}')` : ''" aria-hidden="true"></div>
+                            <img :src="videoInfo?.thumbnail || ''" alt="" class="thumb" loading="lazy" decoding="async">
+                            <div class="media-info">
+                                <h3 class="media-title" x-text="videoInfo?.title"></h3>
+                                <p class="media-author" x-text="videoInfo?.author"></p>
+                                <p class="media-duration" x-show="videoInfo?.duration" x-text="formatDuration(videoInfo?.duration)"></p>
                             </div>
                         </div>
 
-                        <!-- Config Grid -->
-                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
-                            
-                            <!-- Segmented Control for Format -->
-                            <div class="sm:col-span-2">
-                                <label class="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-2 ml-1">Format</label>
-                                <div class="segmented-control flex animate-fade-in">
-                                    <div class="segmented-indicator w-1/2" :style="`transform: translateX(${format === 'audio' ? '100%' : '0%'})`"></div>
-                                    <button @click="selectDefaultQuality('video')" class="flex-1 py-3.5 text-sm font-bold transition-colors" :class="format === 'video' ? 'text-brand-700 dark:text-brand-600 font-extrabold' : 'text-slate-500 dark:text-slate-400'">Video</button>
-                                    <button @click="selectDefaultQuality('audio')" class="flex-1 py-3.5 text-sm font-bold transition-colors" :class="format === 'audio' ? 'text-brand-700 dark:text-brand-600 font-extrabold' : 'text-slate-500 dark:text-slate-400'">Audio</button>
-                                </div>
+                        <!-- Format Toggle -->
+                        <div>
+                            <label class="label">Format</label>
+                            <div class="segmented" role="group" aria-label="Format wählen">
+                                <div class="segmented-indicator" :style="`transform: translateX(${format === 'audio' ? '100%' : '0%'})`" aria-hidden="true"></div>
+                                <button type="button" @click="selectDefaultQuality('video')" :aria-pressed="format === 'video'">Video</button>
+                                <button type="button" @click="selectDefaultQuality('audio')" :aria-pressed="format === 'audio'">Audio</button>
                             </div>
+                        </div>
 
-                            <!-- Quality Grid with Filesize -->
-                            <div class="sm:col-span-2">
-                                <label class="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-2 ml-1">Qualität wählen</label>
-                                <div class="grid grid-cols-2 sm:grid-cols-3 gap-2 sm:gap-3">
-                                    <template x-for="(fmt, idx) in getVisibleFormats()">
-                                        <button @click="quality = fmt.quality"
-                                                class="relative overflow-hidden flex flex-col items-center justify-center py-2.5 px-3 sm:p-4 rounded-xl sm:rounded-2xl border text-center transition-all duration-200 quality-card cursor-pointer min-h-[70px] sm:min-h-[90px]"
-                                                :class="quality === fmt.quality
-                                                    ? 'bg-brand-600 text-white border-brand-600 shadow-lg shadow-brand-500/20 scale-[1.02] font-bold'
-                                                    : 'bg-slate-50 dark:bg-slate-800/40 hover:bg-slate-100 dark:hover:bg-slate-800 border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-300 font-medium'">
-
-                                            <!-- Dynamic BEST ⭐ Stamp -->
-                                            <template x-if="idx === 0">
-                                                <div class="absolute top-0 right-0 w-12 h-12 pointer-events-none overflow-hidden">
-                                                    <div class="best-stamp">Best ⭐</div>
-                                                </div>
-                                            </template>
-
-                                            <span class="text-xs sm:text-sm block pr-3" :class="idx === 0 ? 'font-bold' : ''" x-text="fmt.label + (idx === 0 ? ' ⭐' : '')"></span>
-                                            <span x-show="fmt.filesize" class="text-[10px] sm:text-xs mt-1 opacity-80" x-text="fmt.filesize"></span>
-                                        </button>
-                                    </template>
-                                </div>
-
-                                <!-- Expand/Collapse Button -->
-                                <div x-show="getFilteredFormats().length > 3" class="text-center mt-3" x-cloak>
-                                    <button @click="toggleExpanded()"
-                                            class="inline-flex items-center gap-1.5 text-xs font-bold text-brand-600 dark:text-brand-400 hover:text-brand-700 dark:hover:text-brand-300 transition-colors">
-                                        <span x-text="isExpanded() ? 'Weniger Formate anzeigen' : 'Mehr Formate anzeigen'"></span>
-                                        <svg class="w-4 h-4 transition-transform duration-200" :class="isExpanded() ? 'rotate-180' : ''" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M19 9l-7 7-7-7"/>
-                                        </svg>
+                        <!-- Quality Grid -->
+                        <div>
+                            <label class="label">Qualität wählen</label>
+                            <div class="quality-grid">
+                                <template x-for="(fmt, idx) in getVisibleFormats()" :key="fmt.quality">
+                                    <button type="button" @click="quality = fmt.quality" class="q-card"
+                                            :class="{ active: quality === fmt.quality }"
+                                            :aria-pressed="quality === fmt.quality">
+                                        <template x-if="idx === 0">
+                                            <div class="best-stamp" aria-label="Empfohlen">Best ⭐</div>
+                                        </template>
+                                        <span class="q-name" x-text="fmt.label + (idx === 0 ? ' ⭐' : '')"></span>
+                                        <span class="q-size" x-show="fmt.filesize" x-text="fmt.filesize"></span>
                                     </button>
-                                </div>
-                            </div>
-                        </div>
-
-                        <!-- Playlist Selection Section -->
-                        <div x-show="videoInfo?.playlist_videos && videoInfo?.playlist_videos.length > 0" x-transition class="p-4 sm:p-6 rounded-xl sm:rounded-2xl bg-slate-50 dark:bg-slate-800/30 border border-slate-200 dark:border-slate-800 space-y-3 sm:space-y-4" x-cloak>
-                            <div class="flex items-center justify-between">
-                                <h4 class="text-sm font-bold uppercase tracking-wider text-slate-400">Wähle Videos aus der Playlist</h4>
-                                <div class="flex gap-2">
-                                    <button @click="selectAllPlaylist(true)" class="text-xs font-bold text-brand-600 hover:text-brand-700 transition-colors">Alle</button>
-                                    <span class="text-xs text-slate-300 dark:text-slate-700">•</span>
-                                    <button @click="selectAllPlaylist(false)" class="text-xs font-bold text-slate-500 hover:text-slate-600 transition-colors">Keine</button>
-                                </div>
-                            </div>
-
-                            <div class="max-h-60 overflow-y-auto space-y-2 pr-2">
-                                <template x-for="video in videoInfo?.playlist_videos" :key="video.id">
-                                    <label class="flex items-start gap-3 p-3 rounded-xl hover:bg-slate-100/50 dark:hover:bg-slate-800/50 transition-colors cursor-pointer border border-transparent hover:border-slate-200 dark:hover:border-slate-800/80">
-                                        <input type="checkbox" :value="video.url" x-model="selectedPlaylistUrls" class="mt-1 rounded text-brand-600 focus:ring-brand-500/20 w-4 h-4 border-slate-300 dark:border-slate-700 dark:bg-slate-800">
-                                        <span class="text-sm font-semibold select-none leading-tight" x-text="video.title"></span>
-                                    </label>
                                 </template>
                             </div>
 
-                            <div class="text-xs font-semibold text-slate-500 text-right" x-text="`${selectedPlaylistUrls.length} von ${videoInfo?.playlist_videos?.length || 0} Videos ausgewählt`"></div>
+                            <div x-show="getFilteredFormats().length > 3" class="expand-row" x-cloak>
+                                <button type="button" class="expand-btn" @click="toggleExpanded()"
+                                        :aria-expanded="isExpanded()">
+                                    <span x-text="isExpanded() ? 'Weniger Formate anzeigen' : 'Mehr Formate anzeigen'"></span>
+                                    <svg :class="{ open: isExpanded() }" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M19 9l-7 7-7-7"/>
+                                    </svg>
+                                </button>
+                            </div>
+                        </div>
+
+                        <!-- Playlist Selection -->
+                        <div x-show="videoInfo?.playlist_videos && videoInfo?.playlist_videos.length > 0" class="playlist-panel reveal" x-cloak>
+                            <div class="playlist-head">
+                                <h4>Playlist-Videos auswählen</h4>
+                                <div class="playlist-actions">
+                                    <button type="button" class="link-btn" @click="selectAllPlaylist(true)">Alle</button>
+                                    <button type="button" class="link-btn muted" @click="selectAllPlaylist(false)">Keine</button>
+                                </div>
+                            </div>
+                            <div class="playlist-list">
+                                <template x-for="video in videoInfo?.playlist_videos" :key="video.id">
+                                    <label class="playlist-item">
+                                        <input type="checkbox" :value="video.url" x-model="selectedPlaylistUrls">
+                                        <span x-text="video.title"></span>
+                                    </label>
+                                </template>
+                            </div>
+                            <p class="playlist-count" x-text="`${selectedPlaylistUrls.length} von ${videoInfo?.playlist_videos?.length || 0} Videos ausgewählt`"></p>
                         </div>
 
                         <!-- Action Button -->
-                        <div class="pt-4">
-                            <button 
-                                @click="download()"
-                                :disabled="downloading || completed"
-                                class="relative w-full py-5 rounded-2xl font-bold text-white transition-all overflow-hidden shadow-lg"
-                                :class="(downloading || completed) ? 'bg-slate-100 dark:bg-slate-800 text-slate-400 cursor-not-allowed' : 'bg-brand-600 hover:bg-brand-700 active:scale-[0.99] shadow-brand-500/20'"
-                            >
-                                <div x-show="downloading && !queued" class="absolute inset-0 bg-brand-500/10 origin-left progress-bar" :style="`width: ${progress}%`"></div>
-                                
-                                <div class="relative flex flex-col items-center justify-center gap-2 z-10">
-                                    <div class="flex items-center gap-3">
-                                        <svg x-show="downloading" class="animate-spin w-5 h-5" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"/></svg>
-                                        <svg x-show="!downloading && !completed" class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
-                                        <svg x-show="completed" class="w-6 h-6 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/></svg>
+                        <div>
+                            <button type="button" class="dl-btn" @click="download()" :disabled="downloading || completed"
+                                    :aria-busy="downloading">
+                                <div x-show="downloading && !queued && progress > 0" class="dl-progress"
+                                     :style="`width:${progress}%`" aria-hidden="true"></div>
+                                <div class="dl-content">
+                                    <div class="dl-main">
+                                        <span class="spin" x-show="downloading" aria-hidden="true"></span>
+                                        <svg x-show="!downloading && !completed" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/>
+                                        </svg>
+                                        <svg x-show="completed" class="done-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M5 13l4 4L19 7"/>
+                                        </svg>
                                         <span x-text="downloading ? (queued ? 'In der Warteschlange...' : `Wird heruntergeladen (${progress}%)`) : (completed ? 'Abgeschlossen' : 'Download starten')"></span>
                                     </div>
-                                    <div x-show="downloading && !queued && speed" class="text-xs font-medium opacity-80 flex items-center gap-2">
+                                    <div x-show="downloading && !queued && (speed || eta)" class="dl-sub">
                                         <span x-text="speed"></span>
-                                        <span x-show="eta" class="opacity-60">•</span>
+                                        <span x-show="speed && eta">•</span>
                                         <span x-show="eta" x-text="'ETA ' + eta"></span>
                                     </div>
                                 </div>
@@ -396,27 +886,23 @@
                         </div>
 
                         <!-- Completion Actions -->
-                        <div x-show="completed" x-transition class="pt-2 flex flex-col sm:flex-row gap-4" x-cloak>
-                            <a :href="downloadUrl + (authToken ? (downloadUrl.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(authToken) : '')" 
-                               download 
-                               class="flex-1 py-4 bg-emerald-600 hover:bg-emerald-700 text-white text-center rounded-2xl font-bold shadow-lg shadow-emerald-500/20 transition-all active:scale-[0.99] flex items-center justify-center gap-2">
-                                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+                        <div x-show="completed" class="actions reveal" x-cloak>
+                            <a :href="downloadUrl + (authToken ? (downloadUrl.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(authToken) : '')"
+                               download class="btn-save">
+                                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
                                 Datei speichern
                             </a>
-                            <button @click="reset()" class="px-8 py-4 rounded-2xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 font-bold transition-all active:scale-[0.99] flex items-center justify-center gap-2">
-                                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"/></svg>
+                            <button type="button" class="btn-ghost" @click="reset()">
+                                <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6v6m0 0v6m0-6h6m-6 0H6"/></svg>
                                 Neues Video
                             </button>
                         </div>
                     </div>
                 </div>
-            </div>
+            </section>
         </div>
 
-        <!-- Footer -->
-        <footer class="mt-auto pt-8 w-full text-center text-slate-400 dark:text-slate-600 text-sm font-medium">
-            &copy; 2026 Athena Pi Downloader &bull; Built with Rust
-        </footer>
+        <footer class="footer">&copy; 2026 Athena Pi Downloader &bull; Built with Rust</footer>
     </main>
 
     <script>
@@ -445,7 +931,6 @@
                 loginError: null,
                 eventSource: null,
                 checkingUpdate: false,
-                updateStatus: null,
                 toasts: [],
                 selectedPlaylistUrls: [],
                 videoExpanded: false,
@@ -461,11 +946,10 @@
                 },
 
                 toast(message, type = 'info') {
-                    const id = Date.now() + Math.random().toString(36).substr(2, 5);
+                    const id = Date.now() + Math.random().toString(36).slice(2, 7);
                     this.toasts.push({ id, message, type, visible: true });
-                    setTimeout(() => {
-                        this.dismissToast(id);
-                    }, 4000);
+                    if (this.toasts.length > 4) this.toasts.shift();
+                    setTimeout(() => this.dismissToast(id), 4000);
                 },
 
                 dismissToast(id) {
@@ -474,24 +958,25 @@
                         this.toasts[idx].visible = false;
                         setTimeout(() => {
                             this.toasts = this.toasts.filter(t => t.id !== id);
-                        }, 300);
+                        }, 250);
+                    }
+                },
+
+                closeSSE() {
+                    if (this.eventSource) {
+                        this.eventSource.close();
+                        this.eventSource = null;
                     }
                 },
 
                 getFilteredFormats() {
                     if (!this.videoInfo || !this.videoInfo.formats) return [];
-                    // Filter out hardcoded generic "best" options to use dynamic highest quality formats instead
                     return this.videoInfo.formats.filter(f => f.media_type === this.format && f.quality !== 'best');
                 },
 
                 getVisibleFormats() {
                     const fmts = this.getFilteredFormats();
-                    const isExpanded = this.format === 'video' ? this.videoExpanded : this.audioExpanded;
-                    if (isExpanded) {
-                        return fmts;
-                    } else {
-                        return fmts.slice(0, 3); // 1 row (3 formats maximum)
-                    }
+                    return this.isExpanded() ? fmts : fmts.slice(0, 3);
                 },
 
                 isExpanded() {
@@ -499,47 +984,32 @@
                 },
 
                 toggleExpanded() {
-                    if (this.format === 'video') {
-                        this.videoExpanded = !this.videoExpanded;
-                    } else {
-                        this.audioExpanded = !this.audioExpanded;
-                    }
+                    if (this.format === 'video') this.videoExpanded = !this.videoExpanded;
+                    else this.audioExpanded = !this.audioExpanded;
                 },
 
                 selectDefaultQuality(fmtType) {
                     this.format = fmtType;
-                    const formats = this.videoInfo ? this.videoInfo.formats.filter(f => f.media_type === fmtType && f.quality !== 'best') : [];
-                    if (formats.length > 0) {
-                        this.quality = formats[0].quality;
-                    } else {
-                        this.quality = 'best';
-                    }
-                },
-
-                getSelectedQualityLabel() {
-                    if (!this.videoInfo || !this.videoInfo.formats) return 'Beste Qualität';
-                    const found = this.videoInfo.formats.find(f => f.media_type === this.format && f.quality === this.quality);
-                    return found ? found.label : 'Beste Qualität';
+                    const formats = this.videoInfo
+                        ? this.videoInfo.formats.filter(f => f.media_type === fmtType && f.quality !== 'best')
+                        : [];
+                    this.quality = formats.length > 0 ? formats[0].quality : 'best';
                 },
 
                 formatDuration(val) {
                     if (!val) return '';
-                    if (typeof val === 'string' && val.includes(':')) {
-                        const parts = val.split(':');
-                        if (parts.length > 2) {
-                            return val + ' Std.';
-                        }
-                        return val + ' Min.';
+                    if (typeof val === 'string') {
+                        if (/^\d+$/.test(val)) val = parseInt(val, 10);
+                        else return val.includes(':') ? val : '';
                     }
-                    const seconds = parseInt(val, 10);
-                    if (isNaN(seconds)) return '';
+                    const seconds = Number(val);
+                    if (isNaN(seconds) || seconds <= 0) return '';
                     const h = Math.floor(seconds / 3600);
                     const m = Math.floor((seconds % 3600) / 60);
-                    const s = seconds % 60;
-                    if (h > 0) {
-                        return `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')} Std.`;
-                    }
-                    return `${m}:${s.toString().padStart(2, '0')} Min.`;
+                    const s = Math.floor(seconds % 60);
+                    const mm = m.toString().padStart(h > 0 ? 2 : 1, '0');
+                    const ss = s.toString().padStart(2, '0');
+                    return h > 0 ? `${h}:${mm.padStart(2, '0')}:${ss} Std.` : `${mm}:${ss} Min.`;
                 },
 
                 isValidUrl(str) {
@@ -554,43 +1024,43 @@
                 handlePaste(event) {
                     const pastedText = (event.clipboardData || window.clipboardData).getData('text');
                     if (pastedText) {
-                        this.url = pastedText;
-                        if (this.isValidUrl(pastedText)) {
-                            this.$nextTick(() => {
-                                this.analyze();
-                            });
+                        this.url = pastedText.trim();
+                        if (this.isValidUrl(this.url)) {
+                            this.$nextTick(() => this.analyze());
                         }
                     }
                 },
 
                 async init() {
-                    // Dark Mode
-                    this.darkMode = localStorage.getItem('darkMode') === 'true' || (!('darkMode' in localStorage) && window.matchMedia('(prefers-color-scheme: dark)').matches);
+                    this.darkMode = localStorage.getItem('darkMode') === 'true'
+                        || (localStorage.getItem('darkMode') === null && window.matchMedia('(prefers-color-scheme: dark)').matches);
                     this.updateTheme();
-                    
-                    // Token Recovery
+
                     const storedToken = localStorage.getItem('athena_token');
                     if (storedToken) {
                         this.authToken = storedToken;
                         this.isAuthenticated = true;
                     }
-                    
-                    // Config Check
+
                     await this.checkConfig();
 
-                    // Smart debounced watch for typed URLs
+                    const params = new URLSearchParams(window.location.search);
+                    const shared = params.get('share') || params.get('url');
+                    if (shared && this.isValidUrl(shared)) {
+                        history.replaceState({}, '', window.location.pathname);
+                        this.url = shared.trim();
+                        this.$nextTick(() => this.analyze());
+                        return;
+                    }
+
                     this.$watch('url', value => {
-                        if (!value) return;
-                        if (this.isValidUrl(value)) {
-                            if (this.debounceTimeout) {
-                                clearTimeout(this.debounceTimeout);
+                        if (!value || !this.isValidUrl(value)) return;
+                        clearTimeout(this.debounceTimeout);
+                        this.debounceTimeout = setTimeout(() => {
+                            if (!this.loading && (!this.videoInfo || this.videoInfo.url !== this.cleanUrl(value))) {
+                                this.analyze();
                             }
-                            this.debounceTimeout = setTimeout(() => {
-                                if (!this.loading && (!this.videoInfo || this.videoInfo.url !== this.cleanUrl(value))) {
-                                    this.analyze();
-                                }
-                            }, 800);
-                        }
+                        }, 800);
                     });
                 },
 
@@ -622,14 +1092,15 @@
                             body: JSON.stringify({ password: this.password })
                         });
                         const data = await response.json();
-                        if (data.success && data.data.token) {
+                        if (data.success && data.data && data.data.token) {
                             this.authToken = data.data.token;
                             this.isAuthenticated = true;
                             this.showLogin = false;
                             localStorage.setItem('athena_token', data.data.token);
                             this.password = '';
+                            this.toast('Erfolgreich angemeldet!', 'success');
                         } else {
-                            this.loginError = 'Ungültiges Passwort';
+                            this.loginError = data.error || 'Ungültiges Passwort';
                         }
                     } catch (e) {
                         this.loginError = 'Verbindungsfehler';
@@ -645,8 +1116,7 @@
                 },
 
                 updateTheme() {
-                    if (this.darkMode) document.documentElement.classList.add('dark');
-                    else document.documentElement.classList.remove('dark');
+                    document.documentElement.classList.toggle('dark', this.darkMode);
                 },
 
                 cleanUrl(url) {
@@ -661,26 +1131,34 @@
                 },
 
                 async analyze() {
-                    if (!this.url) return;
+                    if (!this.url || this.loading) return;
                     this.loading = true;
                     this.error = null;
-                    this.videoInfo = null;
+                    this.closeSSE();
+                    this.downloading = false;
+                    this.completed = false;
 
                     try {
                         const response = await fetch('/api/analyze', {
                             method: 'POST',
-                            headers: { 
+                            headers: {
                                 'Content-Type': 'application/json',
                                 ...(this.authToken && { 'Authorization': `Bearer ${this.authToken}` })
                             },
-                            body: JSON.stringify({ url: this.cleanUrl(this.url) })
+                            body: JSON.stringify({ url: this.cleanUrl(this.url.trim()) })
                         });
 
-                        const data = await response.json();
-                        if (!data.success) throw new Error(data.error || 'Fehlgeschlagen');
-                        this.videoInfo = data.data;
+                        let data;
+                        try { data = await response.json(); } catch (_) { throw new Error('Serverfehler'); }
+                        if (!response.ok || !data.success) {
+                            if (response.status === 401) {
+                                this.showLogin = true;
+                                throw new Error('Nicht angemeldet');
+                            }
+                            throw new Error(data.error || 'Fehlgeschlagen');
+                        }
 
-                        // Set the default format & quality to the highest dynamic format instead of hardcoded 'best'
+                        this.videoInfo = data.data;
                         this.selectDefaultQuality('video');
 
                         if (this.videoInfo && this.videoInfo.playlist_videos) {
@@ -690,60 +1168,78 @@
                         }
                         this.toast('Analyse erfolgreich!', 'success');
                     } catch (e) {
-                        this.error = 'Video konnte nicht analysiert werden. Bitte Link prüfen.';
-                        this.toast(this.error, 'error');
-                        if (e.message.includes('Unauthorized')) this.showLogin = true;
+                        if (e.message !== 'Nicht angemeldet') {
+                            this.error = 'Video konnte nicht analysiert werden. Bitte Link prüfen.';
+                            this.toast(this.error, 'error');
+                        }
                     } finally {
                         this.loading = false;
                     }
                 },
 
                 async download() {
-                    if (!this.videoInfo) return;
+                    if (!this.videoInfo || this.downloading) return;
                     this.downloading = true;
+                    this.completed = false;
                     this.error = null;
+                    this.progress = 0;
+                    this.speed = null;
+                    this.eta = null;
 
                     try {
                         const response = await fetch('/api/download', {
                             method: 'POST',
-                            headers: { 
+                            headers: {
                                 'Content-Type': 'application/json',
                                 ...(this.authToken && { 'Authorization': `Bearer ${this.authToken}` })
                             },
-                            body: JSON.stringify({ 
-                                url: this.cleanUrl(this.url), 
+                            body: JSON.stringify({
+                                url: this.cleanUrl(this.url.trim()),
                                 format: this.format,
                                 quality: this.quality,
-                                playlist_urls: (this.videoInfo?.playlist_videos && this.selectedPlaylistUrls.length > 0) ? this.selectedPlaylistUrls : null
+                                playlist_urls: (this.videoInfo?.playlist_videos && this.selectedPlaylistUrls.length > 0)
+                                    ? this.selectedPlaylistUrls : null
                             })
                         });
 
-                        const data = await response.json();
-                        if (!data.success) throw new Error(data.error || 'Start fehlgeschlagen');
-                        
+                        let data;
+                        try { data = await response.json(); } catch (_) { throw new Error('Serverfehler'); }
+                        if (!response.ok || !data.success) {
+                            if (response.status === 401) {
+                                this.showLogin = true;
+                                throw new Error('Nicht angemeldet');
+                            }
+                            throw new Error(data.error || 'Start fehlgeschlagen');
+                        }
+
                         this.downloadId = data.data.download_id;
                         this.queued = (data.data.status === 'queued');
-                        this.toast('Download gestartet...', 'info');
                         this.connectSSE();
                     } catch (e) {
-                        this.error = 'Download-Fehler: ' + e.message;
-                        this.toast(this.error, 'error');
                         this.downloading = false;
+                        if (e.message !== 'Nicht angemeldet') {
+                            this.error = 'Download-Fehler: ' + e.message;
+                            this.toast(this.error, 'error');
+                        }
                     }
                 },
 
                 connectSSE() {
-                    if (this.eventSource) this.eventSource.close();
+                    this.closeSSE();
                     const tokenParam = this.authToken ? `?token=${encodeURIComponent(this.authToken)}` : '';
-                    this.eventSource = new EventSource(`/api/progress/${this.downloadId}${tokenParam}`);
-                    
-                    this.eventSource.onmessage = (event) => {
-                        const data = JSON.parse(event.data);
-                        if (data.error) {
-                            this.error = data.error;
+                    const es = new EventSource(`/api/progress/${this.downloadId}${tokenParam}`);
+                    this.eventSource = es;
+
+                    es.onmessage = (event) => {
+                        let data;
+                        try { data = JSON.parse(event.data); } catch (_) { return; }
+
+                        if (data.status === 'error' || data.error) {
+                            this.error = data.error || 'Fehler beim Herunterladen';
                             this.toast(this.error, 'error');
                             this.downloading = false;
-                            this.eventSource.close();
+                            es.close();
+                            this.eventSource = null;
                             return;
                         }
 
@@ -757,33 +1253,35 @@
                             this.completed = true;
                             this.downloadUrl = data.download_url;
                             this.toast('Download abgeschlossen!', 'success');
-                            this.eventSource.close();
-                        } else if (data.status === 'error') {
-                            this.error = data.error || 'Fehler beim Herunterladen';
-                            this.toast(this.error, 'error');
-                            this.downloading = false;
-                            this.eventSource.close();
+                            es.close();
+                            this.eventSource = null;
                         }
                     };
 
-                    this.eventSource.onerror = () => this.eventSource.close();
+                    es.onerror = () => {
+                        if (this.completed || (!this.downloading && !this.queued)) {
+                            es.close();
+                            this.eventSource = null;
+                        }
+                    };
                 },
 
                 async checkYtdlpUpdate() {
                     this.checkingUpdate = true;
                     try {
-                        const response = await fetch('/api/ytdlp-update', { 
+                        const response = await fetch('/api/ytdlp-update', {
                             method: 'POST',
                             headers: {
                                 ...(this.authToken && { 'Authorization': `Bearer ${this.authToken}` })
                             }
                         });
-                        const data = await response.json();
+                        const data = await response.json().catch(() => ({}));
                         if (data.success) {
                             const msg = data.data.status === 'updated' ? 'yt-dlp wurde aktualisiert!' : 'Bereits aktuell.';
                             this.toast(msg, 'success');
                         } else {
-                            this.toast('Update fehlgeschlagen', 'error');
+                            const detail = data.error ? String(data.error).replace(/^.*?: /, '').slice(0, 120) : '';
+                            this.toast(detail ? `Update fehlgeschlagen: ${detail}` : 'Update fehlgeschlagen', 'error');
                         }
                     } catch (e) {
                         this.toast('Verbindungsfehler bei Update-Prüfung', 'error');
@@ -799,12 +1297,17 @@
                     this.quality = 'best';
                     this.downloading = false;
                     this.completed = false;
+                    this.queued = false;
                     this.progress = 0;
                     this.speed = null;
                     this.eta = null;
                     this.error = null;
+                    this.downloadId = null;
+                    this.downloadUrl = null;
                     this.selectedPlaylistUrls = [];
-                    if (this.eventSource) this.eventSource.close();
+                    this.videoExpanded = false;
+                    this.audioExpanded = false;
+                    this.closeSSE();
                 }
             }
         }

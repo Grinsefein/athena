@@ -1,11 +1,11 @@
+use once_cell::sync::Lazy;
+use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
     path::PathBuf,
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-use once_cell::sync::Lazy;
-use sha2::{Digest, Sha256};
 use tokio::{
     fs,
     sync::{Mutex, Semaphore},
@@ -53,11 +53,15 @@ pub static DOWNLOAD_SEMAPHORE: Lazy<Arc<Semaphore>> = Lazy::new(|| {
     Arc::new(Semaphore::new(max))
 });
 
+pub const TOKEN_MAX_AGE_SECS: f64 = 30.0 * 24.0 * 3600.0;
+pub const LOGIN_WINDOW_SECS: f64 = 900.0;
+pub const MAX_LOGIN_ATTEMPTS: usize = 5;
+
 pub type SharedState = Arc<AppState>;
 
 pub struct AppState {
     pub active_downloads: Mutex<HashMap<String, DownloadInfo>>,
-    pub auth_tokens: Mutex<HashMap<String, ()>>, // Simple token store
+    pub auth_tokens: Mutex<HashMap<String, f64>>, // Token -> creation timestamp
     pub active_children: Mutex<HashMap<String, tokio::process::Child>>, // Active yt-dlp child processes
     pub login_attempts: Mutex<HashMap<String, Vec<f64>>>, // Login rate-limiting timestamps by IP
 }
@@ -102,8 +106,11 @@ pub async fn cleanup_old_data(state: &AppState) {
                     match entry.metadata().await {
                         Ok(metadata) => {
                             if let Ok(modified) = metadata.modified() {
-                                let age_hours =
-                                    modified.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as f64
+                                let age_hours = modified
+                                    .duration_since(UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_secs()
+                                    as f64
                                     / 3600.0;
                                 let current_hours = current_time / 3600.0;
 
@@ -141,6 +148,25 @@ pub async fn cleanup_old_data(state: &AppState) {
             info!("Cleaned up stale memory entry: {}", id);
         }
     }
+
+    // Cleanup expired auth tokens
+    {
+        let mut tokens = state.auth_tokens.lock().await;
+        let before = tokens.len();
+        tokens.retain(|_, created| current_time - *created < TOKEN_MAX_AGE_SECS);
+        if before != tokens.len() {
+            info!("Cleaned up {} expired auth tokens", before - tokens.len());
+        }
+    }
+
+    // Cleanup stale login rate-limit entries
+    {
+        let mut attempts = state.login_attempts.lock().await;
+        for timestamps in attempts.values_mut() {
+            timestamps.retain(|&t| current_time - t < LOGIN_WINDOW_SECS);
+        }
+        attempts.retain(|_, timestamps| !timestamps.is_empty());
+    }
 }
 
 // ============================================================================
@@ -174,16 +200,19 @@ mod tests {
         // Test inserting a download
         {
             let mut downloads = state.active_downloads.lock().await;
-            downloads.insert("test-id".to_string(), DownloadInfo {
-                status: "queued".to_string(),
-                progress: 0.0,
-                file_path: None,
-                file_name: None,
-                error: None,
-                timestamp: now_secs(),
-                speed: None,
-                eta: None,
-            });
+            downloads.insert(
+                "test-id".to_string(),
+                DownloadInfo {
+                    status: "queued".to_string(),
+                    progress: 0.0,
+                    file_path: None,
+                    file_name: None,
+                    error: None,
+                    timestamp: now_secs(),
+                    speed: None,
+                    eta: None,
+                },
+            );
         }
 
         // Test reading it back
@@ -208,16 +237,19 @@ mod tests {
         // Insert
         {
             let mut downloads = state.active_downloads.lock().await;
-            downloads.insert("test-id".to_string(), DownloadInfo {
-                status: "queued".to_string(),
-                progress: 0.0,
-                file_path: None,
-                file_name: None,
-                error: None,
-                timestamp: now_secs(),
-                speed: None,
-                eta: None,
-            });
+            downloads.insert(
+                "test-id".to_string(),
+                DownloadInfo {
+                    status: "queued".to_string(),
+                    progress: 0.0,
+                    file_path: None,
+                    file_name: None,
+                    error: None,
+                    timestamp: now_secs(),
+                    speed: None,
+                    eta: None,
+                },
+            );
         }
 
         // Update progress
@@ -242,5 +274,104 @@ mod tests {
     fn test_constants() {
         assert_eq!(*MAX_FILE_AGE_HOURS, 1.0);
         assert_eq!(*CLEANUP_INTERVAL_SECONDS, 600);
+    }
+}
+
+#[cfg(test)]
+mod auth_cleanup_tests {
+    use super::*;
+
+    fn fresh_state() -> SharedState {
+        Arc::new(AppState {
+            active_downloads: Mutex::new(HashMap::new()),
+            auth_tokens: Mutex::new(HashMap::new()),
+            active_children: Mutex::new(HashMap::new()),
+            login_attempts: Mutex::new(HashMap::new()),
+        })
+    }
+
+    #[tokio::test]
+    async fn test_expired_tokens_removed() {
+        let state = fresh_state();
+        let now = now_secs();
+        {
+            let mut tokens = state.auth_tokens.lock().await;
+            tokens.insert("expired".to_string(), now - TOKEN_MAX_AGE_SECS - 10.0);
+            tokens.insert("fresh".to_string(), now);
+        }
+
+        cleanup_old_data(&state).await;
+
+        let tokens = state.auth_tokens.lock().await;
+        assert!(!tokens.contains_key("expired"));
+        assert!(tokens.contains_key("fresh"));
+    }
+
+    #[tokio::test]
+    async fn test_token_exactly_at_max_age_is_removed() {
+        let state = fresh_state();
+        let now = now_secs();
+        {
+            let mut tokens = state.auth_tokens.lock().await;
+            tokens.insert("boundary".to_string(), now - TOKEN_MAX_AGE_SECS);
+        }
+
+        cleanup_old_data(&state).await;
+
+        let tokens = state.auth_tokens.lock().await;
+        assert!(
+            !tokens.contains_key("boundary"),
+            "token at exact max age should not be considered valid anymore"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_stale_login_attempts_removed() {
+        let state = fresh_state();
+        let now = now_secs();
+        {
+            let mut attempts = state.login_attempts.lock().await;
+            attempts.insert(
+                "stale-ip".to_string(),
+                vec![now - LOGIN_WINDOW_SECS - 1.0, now - LOGIN_WINDOW_SECS - 2.0],
+            );
+            attempts.insert("active-ip".to_string(), vec![now - 60.0, now - 10.0]);
+        }
+
+        cleanup_old_data(&state).await;
+
+        let attempts = state.login_attempts.lock().await;
+        assert!(!attempts.contains_key("stale-ip"));
+        assert!(attempts.contains_key("active-ip"));
+        assert_eq!(attempts.get("active-ip").unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_mixed_login_attempts_partial_retention() {
+        let state = fresh_state();
+        let now = now_secs();
+        {
+            let mut attempts = state.login_attempts.lock().await;
+            attempts.insert(
+                "mixed-ip".to_string(),
+                vec![now - LOGIN_WINDOW_SECS - 5.0, now - 30.0],
+            );
+        }
+
+        cleanup_old_data(&state).await;
+
+        let attempts = state.login_attempts.lock().await;
+        assert!(
+            attempts.contains_key("mixed-ip"),
+            "IP with at least one recent attempt must be kept"
+        );
+        assert_eq!(attempts.get("mixed-ip").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn test_auth_constants_sane() {
+        assert_eq!(TOKEN_MAX_AGE_SECS, 30.0 * 24.0 * 3600.0);
+        assert_eq!(LOGIN_WINDOW_SECS, 900.0);
+        assert_eq!(MAX_LOGIN_ATTEMPTS, 5);
     }
 }

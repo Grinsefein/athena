@@ -49,7 +49,30 @@ sudo chown -R athena:athena /tmp/athena-downloads
 # Also chown the configuration directory
 sudo chown -R athena:athena /etc/athena
 
-# 5. Create systemd service file
+# 5. Dedicated writable yt-dlp copy for the service user.
+#    The web UI update button runs 'yt-dlp -U' inside the service process,
+#    which must be able to REPLACE its own binary (file + directory).
+#    A root-owned binary in /usr/local/bin cannot be replaced by the service
+#    user, so we maintain an athena-owned copy under /var/lib/athena/bin.
+echo "Installing writable yt-dlp copy for the service user..."
+sudo mkdir -p /var/lib/athena/bin
+if command -v yt-dlp >/dev/null 2>&1; then
+    sudo cp "$(command -v yt-dlp)" /var/lib/athena/bin/yt-dlp
+else
+    sudo curl -fL https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /var/lib/athena/bin/yt-dlp
+fi
+sudo chown -R athena:athena /var/lib/athena
+sudo chmod 755 /var/lib/athena/bin/yt-dlp
+
+# 6. Make the service resolve the writable yt-dlp copy first (systemd drop-in)
+echo "Configuring service PATH override..."
+sudo mkdir -p /etc/systemd/system/athena.service.d
+sudo tee /etc/systemd/system/athena.service.d/override.conf > /dev/null <<EOF
+[Service]
+Environment=PATH=/var/lib/athena/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+EOF
+
+# 7. Create systemd service file
 echo "Creating systemd service file..."
 sudo tee /etc/systemd/system/athena.service > /dev/null <<EOF
 [Unit]
@@ -70,7 +93,7 @@ RestartSec=5
 WantedBy=multi-user.target
 EOF
 
-# 6. Enable and start the service
+# 8. Enable and start the service
 echo "Reloading systemd, enabling and starting athena service..."
 sudo systemctl daemon-reload
 sudo systemctl enable athena

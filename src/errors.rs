@@ -221,7 +221,10 @@ mod tests {
         let payload = err.to_response_payload();
 
         assert!(!payload.success);
-        assert_eq!(payload.error, "Invalid format or quality: unsupported format");
+        assert_eq!(
+            payload.error,
+            "Invalid format or quality: unsupported format"
+        );
         assert_eq!(payload.error_code, Some("INVALID_FORMAT".to_string()));
     }
 
@@ -264,24 +267,52 @@ mod tests {
     #[test]
     fn test_all_error_variants_have_unique_codes() {
         let errors = vec![
-            AppError::ExternalCommand { message: "x".to_string() },
-            AppError::ParseVideoInfo { message: "x".to_string() },
-            AppError::DownloadNotFound { id: "x".to_string() },
-            AppError::FileNotFound { path: "x".to_string() },
-            AppError::DownloadNotReady { status: "x".to_string() },
-            AppError::FileSystem { message: "x".to_string() },
-            AppError::ProcessSpawn { message: "x".to_string() },
-            AppError::ProcessWait { message: "x".to_string() },
-            AppError::DownloadFailed { message: "x".to_string() },
-            AppError::InvalidUrl { message: "x".to_string() },
-            AppError::InvalidFormat { message: "x".to_string() },
-            AppError::Internal { message: "x".to_string() },
+            AppError::ExternalCommand {
+                message: "x".to_string(),
+            },
+            AppError::ParseVideoInfo {
+                message: "x".to_string(),
+            },
+            AppError::DownloadNotFound {
+                id: "x".to_string(),
+            },
+            AppError::FileNotFound {
+                path: "x".to_string(),
+            },
+            AppError::DownloadNotReady {
+                status: "x".to_string(),
+            },
+            AppError::FileSystem {
+                message: "x".to_string(),
+            },
+            AppError::ProcessSpawn {
+                message: "x".to_string(),
+            },
+            AppError::ProcessWait {
+                message: "x".to_string(),
+            },
+            AppError::DownloadFailed {
+                message: "x".to_string(),
+            },
+            AppError::InvalidUrl {
+                message: "x".to_string(),
+            },
+            AppError::InvalidFormat {
+                message: "x".to_string(),
+            },
+            AppError::Internal {
+                message: "x".to_string(),
+            },
         ];
 
         let codes: Vec<_> = errors.iter().map(|e| e.error_code()).collect();
         let unique_codes: std::collections::HashSet<_> = codes.iter().cloned().collect();
 
-        assert_eq!(codes.len(), unique_codes.len(), "All error codes should be unique");
+        assert_eq!(
+            codes.len(),
+            unique_codes.len(),
+            "All error codes should be unique"
+        );
     }
 
     #[test]
@@ -315,7 +346,8 @@ mod tests {
             let top = pad + r;
             let bottom = size as f32 - pad - r;
 
-            let inside = if px < pad || px > size as f32 - pad || py < pad || py > size as f32 - pad {
+            let inside = if px < pad || px > size as f32 - pad || py < pad || py > size as f32 - pad
+            {
                 false
             } else if px < left && py < top {
                 (px - left).powi(2) + (py - top).powi(2) <= r.powi(2)

@@ -11,10 +11,11 @@ if systemctl list-unit-files 2>/dev/null | grep -q '^athena.service'; then
     sudo systemctl disable athena || true
 fi
 
-# 2. Remove the systemd unit file
-if [ -f /etc/systemd/system/athena.service ]; then
-    echo "Removing systemd unit file..."
+# 2. Remove the systemd unit file and drop-in overrides
+if [ -f /etc/systemd/system/athena.service ] || [ -d /etc/systemd/system/athena.service.d ]; then
+    echo "Removing systemd unit file and drop-in overrides..."
     sudo rm -f /etc/systemd/system/athena.service
+    sudo rm -rf /etc/systemd/system/athena.service.d
     sudo systemctl daemon-reload
 fi
 
@@ -30,7 +31,13 @@ if [ -d /etc/athena ]; then
     sudo rm -rf /etc/athena
 fi
 
-# 5. Remove the athena system user and group
+# 5. Remove the service data directory (writable yt-dlp copy)
+if [ -d /var/lib/athena ]; then
+    echo "Removing service data directory /var/lib/athena..."
+    sudo rm -rf /var/lib/athena
+fi
+
+# 6. Remove the athena system user and group
 if getent passwd athena >/dev/null; then
     echo "Removing athena system user..."
     sudo userdel athena || true
@@ -40,7 +47,7 @@ if getent group athena >/dev/null; then
     sudo groupdel athena || true
 fi
 
-# 6. Remove download directory
+# 7. Remove download directory
 if [ -d /tmp/athena-downloads ]; then
     echo "Removing download directory /tmp/athena-downloads..."
     sudo rm -rf /tmp/athena-downloads

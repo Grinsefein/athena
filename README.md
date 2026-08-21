@@ -73,6 +73,21 @@ Once installed, you can manage the Athena Pi service with standard `systemctl` c
 - **Restart service**: `sudo systemctl restart athena`
 - **View logs**: `journalctl -u athena -f`
 
+#### Updating yt-dlp
+
+The in-app update button (`/api/ytdlp-update`) runs `yt-dlp -U` inside the service
+process. Since the service runs as the unprivileged `athena` user, it cannot replace
+the root-owned binary in `/usr/local/bin`. The setup scripts therefore install a
+second, athena-owned copy under `/var/lib/athena/bin/yt-dlp` and prepend it to the
+service PATH (via a systemd drop-in). The web UI button updates that copy and works
+without root.
+
+For manual updates of the system-wide binary, run on the host:
+
+```bash
+sudo yt-dlp -U
+```
+
 ### Updating the Service
 After pulling new code, rebuild from source and reinstall the service (also updates yt-dlp). Run it as a normal (non-root) user — the script uses sudo only where needed:
 ```bash

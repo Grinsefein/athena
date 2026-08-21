@@ -14,7 +14,7 @@ strip = true
 axum = { version = "0.7", features = ["macros"] }
 tokio = { version = "1", features = ["full"] }
 tokio-util = { version = "0.7", features = ["io"] }
-tower-http = { version = "0.5", features = ["fs", "trace", "cors", "limit"] }
+tower-http = { version = "0.5", features = ["fs", "trace", "cors", "limit", "compression-gzip"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 futures = "0.3"

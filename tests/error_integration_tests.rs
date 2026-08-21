@@ -1,8 +1,8 @@
 //! Integration tests for error handling module
 
 use athena::errors::{AppError, AppResult, ErrorResponse};
-use axum::response::IntoResponse;
 use axum::http::StatusCode;
+use axum::response::IntoResponse;
 
 #[test]
 fn test_error_response_json_structure() {
@@ -21,59 +21,95 @@ fn test_error_response_json_structure() {
 fn test_http_status_code_mapping() {
     // NOT_FOUND cases
     assert_eq!(
-        AppError::DownloadNotFound { id: "x".to_string() }.status_code(),
+        AppError::DownloadNotFound {
+            id: "x".to_string()
+        }
+        .status_code(),
         StatusCode::NOT_FOUND
     );
     assert_eq!(
-        AppError::FileNotFound { path: "/x".to_string() }.status_code(),
+        AppError::FileNotFound {
+            path: "/x".to_string()
+        }
+        .status_code(),
         StatusCode::NOT_FOUND
     );
     assert_eq!(
-        AppError::DownloadNotReady { status: "queued".to_string() }.status_code(),
+        AppError::DownloadNotReady {
+            status: "queued".to_string()
+        }
+        .status_code(),
         StatusCode::NOT_FOUND
     );
 
     // BAD_REQUEST cases
     assert_eq!(
-        AppError::InvalidUrl { message: "bad".to_string() }.status_code(),
+        AppError::InvalidUrl {
+            message: "bad".to_string()
+        }
+        .status_code(),
         StatusCode::BAD_REQUEST
     );
     assert_eq!(
-        AppError::InvalidFormat { message: "bad".to_string() }.status_code(),
+        AppError::InvalidFormat {
+            message: "bad".to_string()
+        }
+        .status_code(),
         StatusCode::BAD_REQUEST
     );
 
     // BAD_GATEWAY cases (external service issues)
     assert_eq!(
-        AppError::ExternalCommand { message: "yt-dlp failed".to_string() }.status_code(),
+        AppError::ExternalCommand {
+            message: "yt-dlp failed".to_string()
+        }
+        .status_code(),
         StatusCode::BAD_GATEWAY
     );
     assert_eq!(
-        AppError::ParseVideoInfo { message: "invalid json".to_string() }.status_code(),
+        AppError::ParseVideoInfo {
+            message: "invalid json".to_string()
+        }
+        .status_code(),
         StatusCode::BAD_GATEWAY
     );
     assert_eq!(
-        AppError::DownloadFailed { message: "error".to_string() }.status_code(),
+        AppError::DownloadFailed {
+            message: "error".to_string()
+        }
+        .status_code(),
         StatusCode::BAD_GATEWAY
     );
 
     // INTERNAL_SERVER_ERROR cases
     assert_eq!(
-        AppError::FileSystem { message: "io error".to_string() }.status_code(),
+        AppError::FileSystem {
+            message: "io error".to_string()
+        }
+        .status_code(),
         StatusCode::INTERNAL_SERVER_ERROR
     );
     assert_eq!(
-        AppError::ProcessWait { message: "wait failed".to_string() }.status_code(),
+        AppError::ProcessWait {
+            message: "wait failed".to_string()
+        }
+        .status_code(),
         StatusCode::INTERNAL_SERVER_ERROR
     );
     assert_eq!(
-        AppError::Internal { message: "generic".to_string() }.status_code(),
+        AppError::Internal {
+            message: "generic".to_string()
+        }
+        .status_code(),
         StatusCode::INTERNAL_SERVER_ERROR
     );
 
     // SERVICE_UNAVAILABLE
     assert_eq!(
-        AppError::ProcessSpawn { message: "spawn failed".to_string() }.status_code(),
+        AppError::ProcessSpawn {
+            message: "spawn failed".to_string()
+        }
+        .status_code(),
         StatusCode::SERVICE_UNAVAILABLE
     );
 }
@@ -81,9 +117,24 @@ fn test_http_status_code_mapping() {
 #[test]
 fn test_into_response_preserves_status() {
     let test_cases = vec![
-        (AppError::DownloadNotFound { id: "x".to_string() }, StatusCode::NOT_FOUND),
-        (AppError::InvalidUrl { message: "bad".to_string() }, StatusCode::BAD_REQUEST),
-        (AppError::Internal { message: "oops".to_string() }, StatusCode::INTERNAL_SERVER_ERROR),
+        (
+            AppError::DownloadNotFound {
+                id: "x".to_string(),
+            },
+            StatusCode::NOT_FOUND,
+        ),
+        (
+            AppError::InvalidUrl {
+                message: "bad".to_string(),
+            },
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            AppError::Internal {
+                message: "oops".to_string(),
+            },
+            StatusCode::INTERNAL_SERVER_ERROR,
+        ),
     ];
 
     for (err, expected_status) in test_cases {
@@ -199,18 +250,27 @@ fn test_error_response_skips_none_code() {
 
 #[test]
 fn test_app_result_ok_variant() {
-    let result: AppResult<i32> = Ok(42);
+    fn produce() -> AppResult<i32> {
+        Ok(42)
+    }
+    let result = produce();
     assert_eq!(result.unwrap(), 42);
 }
 
 #[test]
 fn test_app_result_error_variant() {
-    let result: AppResult<i32> = Err(AppError::Internal {
-        message: "computation failed".to_string(),
-    });
+    fn produce() -> AppResult<i32> {
+        Err(AppError::Internal {
+            message: "computation failed".to_string(),
+        })
+    }
 
+    let result = produce();
     assert!(result.is_err());
-    let err = result.unwrap_err();
+    let err = match result {
+        Ok(_) => panic!("Expected error"),
+        Err(e) => e,
+    };
     assert!(matches!(err, AppError::Internal { .. }));
 }
 
@@ -259,25 +319,57 @@ async fn test_error_in_async_context() {
 fn test_error_ordering_by_code() {
     // Verify all error codes follow consistent naming pattern
     let errors = vec![
-        AppError::ExternalCommand { message: "x".to_string() },
-        AppError::ParseVideoInfo { message: "x".to_string() },
-        AppError::DownloadNotFound { id: "x".to_string() },
-        AppError::FileNotFound { path: "x".to_string() },
-        AppError::DownloadNotReady { status: "x".to_string() },
-        AppError::FileSystem { message: "x".to_string() },
-        AppError::ProcessSpawn { message: "x".to_string() },
-        AppError::ProcessWait { message: "x".to_string() },
-        AppError::DownloadFailed { message: "x".to_string() },
-        AppError::InvalidUrl { message: "x".to_string() },
-        AppError::InvalidFormat { message: "x".to_string() },
-        AppError::Internal { message: "x".to_string() },
+        AppError::ExternalCommand {
+            message: "x".to_string(),
+        },
+        AppError::ParseVideoInfo {
+            message: "x".to_string(),
+        },
+        AppError::DownloadNotFound {
+            id: "x".to_string(),
+        },
+        AppError::FileNotFound {
+            path: "x".to_string(),
+        },
+        AppError::DownloadNotReady {
+            status: "x".to_string(),
+        },
+        AppError::FileSystem {
+            message: "x".to_string(),
+        },
+        AppError::ProcessSpawn {
+            message: "x".to_string(),
+        },
+        AppError::ProcessWait {
+            message: "x".to_string(),
+        },
+        AppError::DownloadFailed {
+            message: "x".to_string(),
+        },
+        AppError::InvalidUrl {
+            message: "x".to_string(),
+        },
+        AppError::InvalidFormat {
+            message: "x".to_string(),
+        },
+        AppError::Internal {
+            message: "x".to_string(),
+        },
     ];
 
     for err in errors {
         let code = err.error_code();
         // All codes should be uppercase with underscores
         assert_eq!(code, code.to_ascii_uppercase());
-        assert!(code.contains('_'), "Error code should contain underscores: {}", code);
-        assert!(!code.contains(' '), "Error code should not contain spaces: {}", code);
+        assert!(
+            code.contains('_'),
+            "Error code should contain underscores: {}",
+            code
+        );
+        assert!(
+            !code.contains(' '),
+            "Error code should not contain spaces: {}",
+            code
+        );
     }
 }

@@ -1,10 +1,6 @@
-use std::{
-    path::PathBuf,
-    process::Stdio,
-    time::Duration,
-};
 use once_cell::sync::Lazy;
 use regex::Regex;
+use std::{path::PathBuf, process::Stdio, time::Duration};
 use tokio::{
     fs,
     io::{AsyncBufReadExt, AsyncReadExt, BufReader},
@@ -13,7 +9,7 @@ use tokio::{
 };
 use tracing::{error, info, warn};
 
-use crate::state::{DOWNLOAD_DIR, DOWNLOAD_SEMAPHORE, SharedState};
+use crate::state::{SharedState, DOWNLOAD_DIR, DOWNLOAD_SEMAPHORE};
 
 // Pre-compiled regex for progress parsing (captures percentage, speed, and ETA)
 pub static PROGRESS_REGEX: Lazy<Regex> = Lazy::new(|| {
@@ -27,7 +23,10 @@ pub fn get_audio_multiplier(acodec: &str, ext: &str) -> f64 {
     let lower_ext = ext.to_lowercase();
     if lower_acodec.contains("opus") || lower_ext.contains("opus") {
         1.4
-    } else if lower_acodec.contains("aac") || lower_acodec.contains("mp4a") || lower_ext.contains("m4a") {
+    } else if lower_acodec.contains("aac")
+        || lower_acodec.contains("mp4a")
+        || lower_ext.contains("m4a")
+    {
         1.1
     } else if lower_acodec.contains("vorbis") || lower_ext.contains("ogg") {
         1.0
@@ -43,7 +42,10 @@ pub fn map_audio_format_name(acodec: &str, ext: &str) -> String {
     let lower_ext = ext.to_lowercase();
     if lower_acodec.contains("opus") || lower_ext.contains("opus") {
         "opus".to_string()
-    } else if lower_acodec.contains("aac") || lower_acodec.contains("mp4a") || lower_ext.contains("m4a") {
+    } else if lower_acodec.contains("aac")
+        || lower_acodec.contains("mp4a")
+        || lower_ext.contains("m4a")
+    {
         "m4a".to_string()
     } else if lower_acodec.contains("mp3") || lower_ext.contains("mp3") {
         "mp3".to_string()
@@ -96,13 +98,17 @@ pub async fn get_free_space_bytes(path: &std::path::Path) -> Option<u64> {
 pub async fn update_yt_dlp() {
     info!("Checking for yt-dlp updates...");
 
-    let output = Command::new("yt-dlp")
-        .args(["-U"])
-        .output()
-        .await;
+    let output = tokio::time::timeout(
+        Duration::from_secs(180),
+        Command::new("yt-dlp")
+            .args(["-U"])
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await;
 
     match output {
-        Ok(result) => {
+        Ok(Ok(result)) => {
             let stdout = String::from_utf8_lossy(&result.stdout);
             let stderr = String::from_utf8_lossy(&result.stderr);
 
@@ -116,8 +122,11 @@ pub async fn update_yt_dlp() {
                 warn!("yt-dlp update check failed: {} {}", stdout, stderr);
             }
         }
-        Err(e) => {
+        Ok(Err(e)) => {
             warn!("Failed to run yt-dlp -U: {}", e);
+        }
+        Err(_) => {
+            warn!("yt-dlp update timed out");
         }
     }
 }
@@ -174,10 +183,21 @@ pub async fn execute_download(
     quality: &str,
 ) -> Result<(), String> {
     let info_output = Command::new("yt-dlp")
-        .args(["--quiet", "--no-warnings", "--dump-json", "--no-download", url])
-        .output()
-        .await
-        .map_err(|e| format!("Failed to get video info: {}", e))?;
+        .args([
+            "--quiet",
+            "--no-warnings",
+            "--dump-json",
+            "--no-download",
+            url,
+        ])
+        .kill_on_drop(true)
+        .output();
+
+    let info_output = match tokio::time::timeout(Duration::from_secs(90), info_output).await {
+        Ok(Ok(out)) => out,
+        Ok(Err(e)) => return Err(format!("Failed to get video info: {}", e)),
+        Err(_) => return Err("Zeitüberschreitung beim Abrufen der Video-Informationen".to_string()),
+    };
 
     if !info_output.status.success() {
         return Err("Failed to analyze video".to_string());
@@ -186,13 +206,14 @@ pub async fn execute_download(
     let video_info: serde_json::Value = serde_json::from_slice(&info_output.stdout)
         .map_err(|e| format!("Failed to parse video info: {}", e))?;
 
-    let filesize = video_info.get("filesize")
+    let filesize = video_info
+        .get("filesize")
         .and_then(|fs| fs.as_u64())
         .or_else(|| video_info.get("filesize_approx").and_then(|fs| fs.as_u64()))
         .unwrap_or(0);
 
     if filesize > 0 {
-        if let Some(free_space) = get_free_space_bytes(&*DOWNLOAD_DIR).await {
+        if let Some(free_space) = get_free_space_bytes(&DOWNLOAD_DIR).await {
             let required_space = (filesize as f64 * 1.2) as u64;
             if free_space < required_space {
                 return Err(format!(
@@ -204,20 +225,22 @@ pub async fn execute_download(
         }
     }
 
-    let title = video_info.get("title")
+    let title = video_info
+        .get("title")
         .and_then(|t| t.as_str())
         .unwrap_or("download");
 
     let _file_name = format!("{}.{}", sanitize_filename(title), "mp4");
 
-    let mut args = Vec::new();
-    args.push("--quiet");
-    args.push("--no-warnings");
-    args.push("--newline");
-    args.push("--progress");
-    args.push("--embed-thumbnail");
-    args.push("--sponsorblock-remove");
-    args.push("sponsor");
+    let mut args = vec![
+        "--quiet",
+        "--no-warnings",
+        "--newline",
+        "--progress",
+        "--embed-thumbnail",
+        "--sponsorblock-remove",
+        "sponsor",
+    ];
 
     let format_arg;
     let mut extract_audio = false;
@@ -237,7 +260,10 @@ pub async fn execute_download(
             if parts.len() == 2 {
                 let height_str: String = parts[0].chars().filter(|c| c.is_ascii_digit()).collect();
                 let ext = parts[1];
-                format_arg = format!("bestvideo[height<={}][ext={}]+bestaudio/bestvideo[height<={}]+bestaudio/best", height_str, ext, height_str);
+                format_arg = format!(
+                    "bestvideo[height<={}][ext={}]+bestaudio/bestvideo[height<={}]+bestaudio/best",
+                    height_str, ext, height_str
+                );
             } else {
                 format_arg = "bestvideo+bestaudio/best".to_string();
             }
@@ -266,6 +292,7 @@ pub async fn execute_download(
         .args(&args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
+        .kill_on_drop(true)
         .spawn()
         .map_err(|e| format!("Failed to spawn yt-dlp: {}", e))?;
 
@@ -274,8 +301,6 @@ pub async fn execute_download(
     // Register the child process for Graceful Shutdown
     {
         let mut children = state.active_children.lock().await;
-        // Since tokio's Child process isn't Send in some configurations without Mutex protection,
-        // we can safely store it here.
         children.insert(download_id.to_string(), child);
     }
 
@@ -291,7 +316,9 @@ pub async fn execute_download(
                 if let Some(cap) = PROGRESS_REGEX.captures(&line) {
                     if let Some(percent_match) = cap.get(1) {
                         if let Ok(percent) = percent_match.as_str().parse::<f64>() {
-                            let speed = if let (Some(speed_val), Some(speed_unit)) = (cap.get(4), cap.get(5)) {
+                            let speed = if let (Some(speed_val), Some(speed_unit)) =
+                                (cap.get(4), cap.get(5))
+                            {
                                 Some(format!("{} {}/s", speed_val.as_str(), speed_unit.as_str()))
                             } else {
                                 None
@@ -316,11 +343,16 @@ pub async fn execute_download(
     // Get the child back out of our registry to wait/handle its exit
     let mut child = {
         let mut children = state.active_children.lock().await;
-        children.remove(download_id).ok_or("Child process untracked unexpectedly")?
+        children
+            .remove(download_id)
+            .ok_or("Child process untracked unexpectedly")?
     };
 
     let stderr = child.stderr.take();
-    let status = child.wait().await.map_err(|e| format!("Failed to wait for process: {}", e))?;
+    let status = child
+        .wait()
+        .await
+        .map_err(|e| format!("Failed to wait for process: {}", e))?;
 
     if !status.success() {
         let mut error_msg = "yt-dlp process failed".to_string();
@@ -345,7 +377,10 @@ pub async fn execute_download(
             while let Ok(Some(entry)) = entries.next_entry().await {
                 let path = entry.path();
                 if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                    if name.contains(&id_marker) && !name.ends_with(".part") && !name.ends_with(".ytdl") {
+                    if name.contains(&id_marker)
+                        && !name.ends_with(".part")
+                        && !name.ends_with(".ytdl")
+                    {
                         info!("Found downloaded file: {}", name);
                         downloaded_file = Some(path);
                         break;
@@ -359,12 +394,16 @@ pub async fn execute_download(
     let final_path = match downloaded_file {
         Some(path) => path,
         None => {
-            error!("Could not find downloaded file with ID marker: {}", id_marker);
+            error!(
+                "Could not find downloaded file with ID marker: {}",
+                id_marker
+            );
             return Err("Downloaded file not found".to_string());
         }
     };
 
-    let final_file_name = final_path.file_name()
+    let final_file_name = final_path
+        .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or(&_file_name)
         .to_string();
@@ -380,6 +419,292 @@ pub async fn execute_download(
     }
 
     info!("Download {} completed: {:?}", download_id, final_path);
+    Ok(())
+}
+
+pub async fn playlist_download_task(
+    state: SharedState,
+    download_id: String,
+    urls: Vec<String>,
+    format_type: String,
+    quality: String,
+) {
+    info!("Playlist download {} waiting for semaphore...", download_id);
+    let permit = DOWNLOAD_SEMAPHORE.acquire().await;
+    {
+        let mut downloads = state.active_downloads.lock().await;
+        if let Some(info) = downloads.get_mut(&download_id) {
+            info.status = "processing".to_string();
+        }
+    }
+
+    info!(
+        "Playlist download {} starting processing of {} videos",
+        download_id,
+        urls.len()
+    );
+
+    let result =
+        execute_playlist_download(&state, &download_id, &urls, &format_type, &quality).await;
+
+    if let Err(e) = result {
+        error!("Playlist download {} failed: {}", download_id, e);
+        let mut downloads = state.active_downloads.lock().await;
+        if let Some(info) = downloads.get_mut(&download_id) {
+            info.status = "error".to_string();
+            info.error = Some(e);
+        }
+    }
+
+    drop(permit);
+}
+
+pub async fn execute_playlist_download(
+    state: &SharedState,
+    download_id: &str,
+    urls: &[String],
+    format_type: &str,
+    quality: &str,
+) -> Result<(), String> {
+    let temp_dir = DOWNLOAD_DIR.join(format!("playlist-temp-{}", download_id));
+    fs::create_dir_all(&temp_dir)
+        .await
+        .map_err(|e| format!("Fehler beim Erstellen des Temp-Verzeichnisses: {}", e))?;
+
+    let total_videos = urls.len();
+    let mut downloaded_files = Vec::new();
+
+    for (index, url) in urls.iter().enumerate() {
+        {
+            let mut downloads = state.active_downloads.lock().await;
+            if let Some(info) = downloads.get_mut(download_id) {
+                info.speed = Some(format!("Video {}/{}", index + 1, total_videos));
+            }
+        }
+
+        let info_output = Command::new("yt-dlp")
+            .args([
+                "--quiet",
+                "--no-warnings",
+                "--dump-json",
+                "--no-download",
+                url,
+            ])
+            .kill_on_drop(true)
+            .output();
+
+        let info_output = match tokio::time::timeout(Duration::from_secs(60), info_output).await {
+            Ok(Ok(out)) => out,
+            Ok(Err(e)) => {
+                warn!("Failed to analyze playlist video at {}: {}", url, e);
+                continue;
+            }
+            Err(_) => {
+                warn!("Timeout analyzing playlist video at {}", url);
+                continue;
+            }
+        };
+
+        if !info_output.status.success() {
+            warn!("Failed to analyze playlist video at {}", url);
+            continue;
+        }
+
+        let video_info: serde_json::Value = serde_json::from_slice(&info_output.stdout)
+            .map_err(|e| format!("Failed to parse video info: {}", e))?;
+
+        let title = video_info
+            .get("title")
+            .and_then(|t| t.as_str())
+            .unwrap_or("download");
+
+        let ext = if format_type == "audio" { "mp3" } else { "mp4" };
+        let out_file_template = temp_dir.join(format!("video-{}.%(ext)s", index));
+
+        let mut args = vec![
+            "--quiet",
+            "--no-warnings",
+            "--newline",
+            "--progress",
+            "--embed-thumbnail",
+            "--sponsorblock-remove",
+            "sponsor",
+        ];
+
+        let format_arg;
+        let mut extract_audio = false;
+
+        if format_type == "audio" {
+            extract_audio = true;
+            if quality == "best" {
+                format_arg = "bestaudio/best".to_string();
+            } else {
+                format_arg = quality.to_string();
+            }
+        } else {
+            if quality == "best" {
+                format_arg = "bestvideo+bestaudio/best".to_string();
+            } else {
+                let parts: Vec<&str> = quality.split('-').collect();
+                if parts.len() == 2 {
+                    let height_str: String =
+                        parts[0].chars().filter(|c| c.is_ascii_digit()).collect();
+                    let ext = parts[1];
+                    format_arg = format!("bestvideo[height<={}][ext={}]+bestaudio/bestvideo[height<={}]+bestaudio/best", height_str, ext, height_str);
+                } else {
+                    format_arg = "bestvideo+bestaudio/best".to_string();
+                }
+            }
+        }
+
+        args.push("-f");
+        args.push(&format_arg);
+        args.push("-o");
+        let out_file_template_str = out_file_template.to_str().ok_or("Invalid output path")?;
+        args.push(out_file_template_str);
+
+        if extract_audio {
+            args.push("--extract-audio");
+            args.push("--audio-format");
+            args.push("mp3");
+        }
+
+        args.push(url);
+
+        let mut child = Command::new("yt-dlp")
+            .args(&args)
+            .stdout(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .map_err(|e| format!("Failed to spawn yt-dlp: {}", e))?;
+
+        let stdout = child.stdout.take().ok_or("Failed to capture stdout")?;
+
+        // Register child process for graceful shutdown
+        {
+            let mut children = state.active_children.lock().await;
+            children.insert(format!("{}-{}", download_id, index), child);
+        }
+
+        let mut reader = BufReader::new(stdout);
+        let mut line = String::new();
+
+        loop {
+            line.clear();
+            match reader.read_line(&mut line).await {
+                Ok(0) => break,
+                Ok(_) => {
+                    if let Some(cap) = PROGRESS_REGEX.captures(&line) {
+                        if let Some(percent_match) = cap.get(1) {
+                            if let Ok(percent) = percent_match.as_str().parse::<f64>() {
+                                let overall_pct =
+                                    ((index as f64) * 100.0 + percent) / (total_videos as f64);
+
+                                let speed = if let (Some(speed_val), Some(speed_unit)) =
+                                    (cap.get(4), cap.get(5))
+                                {
+                                    Some(format!(
+                                        "Video {}/{} • {} {}/s",
+                                        index + 1,
+                                        total_videos,
+                                        speed_val.as_str(),
+                                        speed_unit.as_str()
+                                    ))
+                                } else {
+                                    Some(format!("Video {}/{}", index + 1, total_videos))
+                                };
+
+                                let eta = cap.get(6).map(|m| m.as_str().to_string());
+
+                                let mut downloads = state.active_downloads.lock().await;
+                                if let Some(info) = downloads.get_mut(download_id) {
+                                    info.progress = overall_pct;
+                                    info.speed = speed;
+                                    info.eta = eta;
+                                }
+                            }
+                        }
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+
+        // Clean up from active_children registry
+        let mut child = {
+            let mut children = state.active_children.lock().await;
+            children
+                .remove(&format!("{}-{}", download_id, index))
+                .ok_or("Playlist child process untracked unexpectedly")?
+        };
+
+        let _ = child.wait().await;
+
+        if let Ok(mut entries) = fs::read_dir(&temp_dir).await {
+            while let Ok(Some(entry)) = entries.next_entry().await {
+                let path = entry.path();
+                if path.is_file() {
+                    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                    if name.starts_with(&format!("video-{}", index))
+                        && !name.ends_with(".part")
+                        && !name.ends_with(".ytdl")
+                    {
+                        let file_ext = path.extension().and_then(|e| e.to_str()).unwrap_or(ext);
+                        let sanitized_title = sanitize_filename(title);
+                        let target_path =
+                            temp_dir.join(format!("{}.{}", sanitized_title, file_ext));
+                        let _ = fs::rename(&path, &target_path).await;
+                        downloaded_files.push(target_path);
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    if downloaded_files.is_empty() {
+        let _ = fs::remove_dir_all(&temp_dir).await;
+        return Err("Keines der Playlist-Videos konnte heruntergeladen werden.".to_string());
+    }
+
+    let zip_name = format!("playlist-[{}].zip", download_id);
+    let zip_path = DOWNLOAD_DIR.join(&zip_name);
+
+    {
+        let file =
+            std::fs::File::create(&zip_path).map_err(|e| format!("Failed to create zip: {}", e))?;
+        let mut zip = zip::ZipWriter::new(file);
+        let options =
+            zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+
+        for file_path in &downloaded_files {
+            if let Some(name) = file_path.file_name().and_then(|n| n.to_str()) {
+                zip.start_file(name, options)
+                    .map_err(|e| format!("Failed to add file to zip: {}", e))?;
+                let mut f = std::fs::File::open(file_path)
+                    .map_err(|e| format!("Failed to open file for zipping: {}", e))?;
+                std::io::copy(&mut f, &mut zip)
+                    .map_err(|e| format!("Failed to zip content: {}", e))?;
+            }
+        }
+        zip.finish()
+            .map_err(|e| format!("Failed to finish zip: {}", e))?;
+    }
+
+    let _ = fs::remove_dir_all(&temp_dir).await;
+
+    {
+        let mut downloads = state.active_downloads.lock().await;
+        if let Some(info) = downloads.get_mut(download_id) {
+            info.status = "completed".to_string();
+            info.progress = 100.0;
+            info.file_path = Some(zip_path);
+            info.file_name = Some(zip_name);
+            info.speed = None;
+            info.eta = None;
+        }
+    }
+
     Ok(())
 }
 
@@ -446,11 +771,26 @@ mod tests {
             ("[download]  50.5%", Some(("50.5", None, None, None))),
             ("[download] 100%", Some(("100", None, None, None))),
             ("[download]   0%", Some(("0", None, None, None))),
-            ("[download]  12.34% of 100MiB", Some(("12.34", Some("100"), Some("MiB"), None))),
-            ("[download]  50% of ~123.45MiB", Some(("50", Some("123.45"), Some("MiB"), None))),
-            ("[download]  50% of 100MiB at 5.67MiB/s", Some(("50", Some("100"), Some("MiB"), Some("5.67")))),
-            ("[download]  45.2% of  123.45MiB at    5.67MiB/s ETA 00:15", Some(("45.2", Some("123.45"), Some("MiB"), Some("5.67")))),
-            ("[download]  80% of ~500MiB at 10.5MiB/s ETA 01:30", Some(("80", Some("500"), Some("MiB"), Some("10.5")))),
+            (
+                "[download]  12.34% of 100MiB",
+                Some(("12.34", Some("100"), Some("MiB"), None)),
+            ),
+            (
+                "[download]  50% of ~123.45MiB",
+                Some(("50", Some("123.45"), Some("MiB"), None)),
+            ),
+            (
+                "[download]  50% of 100MiB at 5.67MiB/s",
+                Some(("50", Some("100"), Some("MiB"), Some("5.67"))),
+            ),
+            (
+                "[download]  45.2% of  123.45MiB at    5.67MiB/s ETA 00:15",
+                Some(("45.2", Some("123.45"), Some("MiB"), Some("5.67"))),
+            ),
+            (
+                "[download]  80% of ~500MiB at 10.5MiB/s ETA 01:30",
+                Some(("80", Some("500"), Some("MiB"), Some("10.5"))),
+            ),
         ];
 
         for (input, expected) in test_cases {
@@ -458,21 +798,49 @@ mod tests {
             if let Some((exp_pct, exp_size_val, exp_size_unit, exp_speed)) = expected {
                 assert!(caps.is_some(), "Should match: {}", input);
                 let caps = caps.unwrap();
-                assert_eq!(caps.get(1).unwrap().as_str(), exp_pct, "Percentage mismatch for: {}", input);
+                assert_eq!(
+                    caps.get(1).unwrap().as_str(),
+                    exp_pct,
+                    "Percentage mismatch for: {}",
+                    input
+                );
 
                 if let Some(exp_val) = exp_size_val {
-                    assert!(caps.get(2).is_some(), "Should have size value for: {}", input);
-                    assert_eq!(caps.get(2).unwrap().as_str(), exp_val, "Size value mismatch for: {}", input);
+                    assert!(
+                        caps.get(2).is_some(),
+                        "Should have size value for: {}",
+                        input
+                    );
+                    assert_eq!(
+                        caps.get(2).unwrap().as_str(),
+                        exp_val,
+                        "Size value mismatch for: {}",
+                        input
+                    );
                 }
 
                 if let Some(exp_unit) = exp_size_unit {
-                    assert!(caps.get(3).is_some(), "Should have size unit for: {}", input);
-                    assert_eq!(caps.get(3).unwrap().as_str(), exp_unit, "Size unit mismatch for: {}", input);
+                    assert!(
+                        caps.get(3).is_some(),
+                        "Should have size unit for: {}",
+                        input
+                    );
+                    assert_eq!(
+                        caps.get(3).unwrap().as_str(),
+                        exp_unit,
+                        "Size unit mismatch for: {}",
+                        input
+                    );
                 }
 
                 if let Some(exp_spd) = exp_speed {
                     assert!(caps.get(4).is_some(), "Should have speed for: {}", input);
-                    assert_eq!(caps.get(4).unwrap().as_str(), exp_spd, "Speed mismatch for: {}", input);
+                    assert_eq!(
+                        caps.get(4).unwrap().as_str(),
+                        exp_spd,
+                        "Speed mismatch for: {}",
+                        input
+                    );
                 }
             }
         }
@@ -480,12 +848,7 @@ mod tests {
 
     #[test]
     fn test_progress_regex_no_match() {
-        let no_match_cases = vec![
-            "[info] Downloading",
-            "50% complete",
-            "",
-            "[download]",
-        ];
+        let no_match_cases = vec!["[info] Downloading", "50% complete", "", "[download]"];
 
         for input in no_match_cases {
             assert!(
@@ -515,244 +878,4 @@ mod tests {
         let unique_name = format!("{}_{}.{}", safe_title, timestamp, ext);
         assert_eq!(unique_name, "my_video_1234567890.mp4");
     }
-}
-
-pub async fn playlist_download_task(
-    state: SharedState,
-    download_id: String,
-    urls: Vec<String>,
-    format_type: String,
-    quality: String,
-) {
-    info!("Playlist download {} waiting for semaphore...", download_id);
-    let permit = DOWNLOAD_SEMAPHORE.acquire().await;
-    {
-        let mut downloads = state.active_downloads.lock().await;
-        if let Some(info) = downloads.get_mut(&download_id) {
-            info.status = "processing".to_string();
-        }
-    }
-
-    info!("Playlist download {} starting processing of {} videos", download_id, urls.len());
-
-    let result = execute_playlist_download(&state, &download_id, &urls, &format_type, &quality).await;
-
-    if let Err(e) = result {
-        error!("Playlist download {} failed: {}", download_id, e);
-        let mut downloads = state.active_downloads.lock().await;
-        if let Some(info) = downloads.get_mut(&download_id) {
-            info.status = "error".to_string();
-            info.error = Some(e);
-        }
-    }
-
-    drop(permit);
-}
-
-pub async fn execute_playlist_download(
-    state: &SharedState,
-    download_id: &str,
-    urls: &[String],
-    format_type: &str,
-    quality: &str,
-) -> Result<(), String> {
-    let temp_dir = DOWNLOAD_DIR.join(format!("playlist-temp-{}", download_id));
-    fs::create_dir_all(&temp_dir)
-        .await
-        .map_err(|e| format!("Fehler beim Erstellen des Temp-Verzeichnisses: {}", e))?;
-
-    let total_videos = urls.len();
-    let mut downloaded_files = Vec::new();
-
-    for (index, url) in urls.iter().enumerate() {
-        {
-            let mut downloads = state.active_downloads.lock().await;
-            if let Some(info) = downloads.get_mut(download_id) {
-                info.speed = Some(format!("Video {}/{}", index + 1, total_videos));
-            }
-        }
-
-        let info_output = Command::new("yt-dlp")
-            .args(["--quiet", "--no-warnings", "--dump-json", "--no-download", url])
-            .output()
-            .await
-            .map_err(|e| format!("Failed to get video info: {}", e))?;
-
-        if !info_output.status.success() {
-            warn!("Failed to analyze playlist video at {}", url);
-            continue;
-        }
-
-        let video_info: serde_json::Value = serde_json::from_slice(&info_output.stdout)
-            .map_err(|e| format!("Failed to parse video info: {}", e))?;
-
-        let title = video_info.get("title")
-            .and_then(|t| t.as_str())
-            .unwrap_or("download");
-
-        let ext = if format_type == "audio" { "mp3" } else { "mp4" };
-        let out_file_template = temp_dir.join(format!("video-{}.%(ext)s", index));
-
-        let mut args = Vec::new();
-        args.push("--quiet");
-        args.push("--no-warnings");
-        args.push("--newline");
-        args.push("--progress");
-        args.push("--embed-thumbnail");
-        args.push("--sponsorblock-remove");
-        args.push("sponsor");
-
-        let format_arg;
-        let mut extract_audio = false;
-
-        if format_type == "audio" {
-            extract_audio = true;
-            if quality == "best" {
-                format_arg = "bestaudio/best".to_string();
-            } else {
-                format_arg = quality.to_string();
-            }
-        } else {
-            if quality == "best" {
-                format_arg = "bestvideo+bestaudio/best".to_string();
-            } else {
-                let parts: Vec<&str> = quality.split('-').collect();
-                if parts.len() == 2 {
-                    let height_str: String = parts[0].chars().filter(|c| c.is_ascii_digit()).collect();
-                    let ext = parts[1];
-                    format_arg = format!("bestvideo[height<={}][ext={}]+bestaudio/bestvideo[height<={}]+bestaudio/best", height_str, ext, height_str);
-                } else {
-                    format_arg = "bestvideo+bestaudio/best".to_string();
-                }
-            }
-        }
-
-        args.push("-f");
-        args.push(&format_arg);
-        args.push("-o");
-        let out_file_template_str = out_file_template.to_str().ok_or("Invalid output path")?;
-        args.push(out_file_template_str);
-
-        if extract_audio {
-            args.push("--extract-audio");
-            args.push("--audio-format");
-            args.push("mp3");
-        }
-
-        args.push(url);
-
-        let mut child = Command::new("yt-dlp")
-            .args(&args)
-            .stdout(Stdio::piped())
-            .spawn()
-            .map_err(|e| format!("Failed to spawn yt-dlp: {}", e))?;
-
-        let stdout = child.stdout.take().ok_or("Failed to capture stdout")?;
-
-        // Register child process for graceful shutdown
-        {
-            let mut children = state.active_children.lock().await;
-            children.insert(format!("{}-{}", download_id, index), child);
-        }
-
-        let mut reader = BufReader::new(stdout);
-        let mut line = String::new();
-
-        loop {
-            line.clear();
-            match reader.read_line(&mut line).await {
-                Ok(0) => break,
-                Ok(_) => {
-                    if let Some(cap) = PROGRESS_REGEX.captures(&line) {
-                        if let Some(percent_match) = cap.get(1) {
-                            if let Ok(percent) = percent_match.as_str().parse::<f64>() {
-                                let overall_pct = ((index as f64) * 100.0 + percent) / (total_videos as f64);
-
-                                let speed = if let (Some(speed_val), Some(speed_unit)) = (cap.get(4), cap.get(5)) {
-                                    Some(format!("Video {}/{} • {} {}/s", index + 1, total_videos, speed_val.as_str(), speed_unit.as_str()))
-                                } else {
-                                    Some(format!("Video {}/{}", index + 1, total_videos))
-                                };
-
-                                let eta = cap.get(6).map(|m| m.as_str().to_string());
-
-                                let mut downloads = state.active_downloads.lock().await;
-                                if let Some(info) = downloads.get_mut(download_id) {
-                                    info.progress = overall_pct;
-                                    info.speed = speed;
-                                    info.eta = eta;
-                                }
-                            }
-                        }
-                    }
-                }
-                Err(_) => break,
-            }
-        }
-
-        // Clean up from active_children registry
-        let mut child = {
-            let mut children = state.active_children.lock().await;
-            children.remove(&format!("{}-{}", download_id, index)).ok_or("Playlist child process untracked unexpectedly")?
-        };
-
-        let _ = child.wait().await;
-
-        if let Ok(mut entries) = fs::read_dir(&temp_dir).await {
-            while let Ok(Some(entry)) = entries.next_entry().await {
-                let path = entry.path();
-                if path.is_file() {
-                    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                    if name.starts_with(&format!("video-{}", index)) && !name.ends_with(".part") && !name.ends_with(".ytdl") {
-                        let file_ext = path.extension().and_then(|e| e.to_str()).unwrap_or(ext);
-                        let sanitized_title = sanitize_filename(title);
-                        let target_path = temp_dir.join(format!("{}.{}", sanitized_title, file_ext));
-                        let _ = fs::rename(&path, &target_path).await;
-                        downloaded_files.push(target_path);
-                        break;
-                    }
-                }
-            }
-        }
-    }
-
-    if downloaded_files.is_empty() {
-        let _ = fs::remove_dir_all(&temp_dir).await;
-        return Err("Keines der Playlist-Videos konnte heruntergeladen werden.".to_string());
-    }
-
-    let zip_name = format!("playlist-[{}].zip", download_id);
-    let zip_path = DOWNLOAD_DIR.join(&zip_name);
-
-    {
-        let file = std::fs::File::create(&zip_path).map_err(|e| format!("Failed to create zip: {}", e))?;
-        let mut zip = zip::ZipWriter::new(file);
-        let options = zip::write::FileOptions::default()
-            .compression_method(zip::CompressionMethod::Deflated);
-
-        for file_path in &downloaded_files {
-            if let Some(name) = file_path.file_name().and_then(|n| n.to_str()) {
-                zip.start_file(name, options).map_err(|e| format!("Failed to add file to zip: {}", e))?;
-                let mut f = std::fs::File::open(file_path).map_err(|e| format!("Failed to open file for zipping: {}", e))?;
-                std::io::copy(&mut f, &mut zip).map_err(|e| format!("Failed to zip content: {}", e))?;
-            }
-        }
-        zip.finish().map_err(|e| format!("Failed to finish zip: {}", e))?;
-    }
-
-    let _ = fs::remove_dir_all(&temp_dir).await;
-
-    {
-        let mut downloads = state.active_downloads.lock().await;
-        if let Some(info) = downloads.get_mut(download_id) {
-            info.status = "completed".to_string();
-            info.progress = 100.0;
-            info.file_path = Some(zip_path);
-            info.file_name = Some(zip_name);
-            info.speed = None;
-            info.eta = None;
-        }
-    }
-
-    Ok(())
 }

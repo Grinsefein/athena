@@ -4,10 +4,12 @@
   "short_name": "Athena",
   "description": "Premium Video Downloader",
   "start_url": "/?source=pwa",
+  "scope": "/",
   "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "orientation": "any",
   "background_color": "#0f172a",
   "theme_color": "#434ed1",
-  "orientation": "portrait-primary",
   "icons": [
     {
       "src": "/app-icon.png",

@@ -135,6 +135,10 @@ pub async fn update_yt_dlp() {
 pub async fn periodic_yt_dlp_update() {
     let mut interval = interval(Duration::from_secs(SECONDS_PER_DAY));
 
+    // The boot-time check in main() already runs an update; consume the
+    // immediate first tick so we don't run two concurrent 'yt-dlp -U'.
+    interval.tick().await;
+
     loop {
         interval.tick().await;
         info!("Running periodic yt-dlp update check...");

@@ -280,6 +280,182 @@ pub async fn login(
     }))
 }
 
+fn format_filesize(bytes: f64) -> Option<String> {
+    if bytes <= 0.0 {
+        return None;
+    }
+    if bytes < 1024.0 * 1024.0 {
+        Some(format!("{:.1} KB", bytes / 1024.0))
+    } else if bytes < 1024.0 * 1024.0 * 1024.0 {
+        Some(format!("{:.1} MB", bytes / (1024.0 * 1024.0)))
+    } else {
+        Some(format!("{:.2} GB", bytes / (1024.0 * 1024.0 * 1024.0)))
+    }
+}
+
+/// Build the user-facing format preset list from a raw yt-dlp info JSON object.
+///
+/// yt-dlp exposes every raw stream, including DASH/HLS duplicates of the same
+/// quality under different format_ids. Streams are grouped into distinct
+/// presets here so the UI never sees raw stream arrays:
+/// - video: one preset per (height, container), sorted by height descending
+/// - audio: one preset per (codec, ~10 kbps bucket), best variant per group,
+///   sorted by perceived quality descending
+fn build_format_presets(info: &serde_json::Value) -> Vec<FormatInfo> {
+    let mut parsed_video_formats = Vec::new();
+    let mut seen_video = std::collections::HashSet::new();
+
+    // Audio presets grouped by (codec, ~10kbps bucket): YouTube exposes the same
+    // stream multiple times (DASH/HLS duplicates with distinct format_ids), so
+    // grouping must not rely on format_id. Keep the best variant per preset.
+    let mut audio_presets: HashMap<(String, u64), (String, String, f64, f64)> = HashMap::new();
+
+    if let Some(formats) = info.get("formats").and_then(|f| f.as_array()) {
+        for fmt in formats {
+            let vcodec = fmt.get("vcodec").and_then(|v| v.as_str()).unwrap_or("none");
+            let acodec = fmt.get("acodec").and_then(|a| a.as_str()).unwrap_or("none");
+            let ext = fmt.get("ext").and_then(|e| e.as_str()).unwrap_or("unknown");
+
+            if ext == "mhtml" || ext == "unknown" {
+                continue;
+            }
+
+            if vcodec != "none" {
+                let height = fmt.get("height").and_then(|h| h.as_u64()).unwrap_or(0);
+                if height > 0 {
+                    let key = (height, ext.to_string());
+                    if seen_video.insert(key) {
+                        parsed_video_formats.push((height, ext.to_string()));
+                    }
+                }
+            } else if acodec != "none" {
+                let format_id = fmt
+                    .get("format_id")
+                    .and_then(|id| id.as_str())
+                    .unwrap_or("unknown");
+                if format_id != "unknown" {
+                    let abr = fmt
+                        .get("abr")
+                        .and_then(|a| a.as_f64())
+                        .or_else(|| fmt.get("tbr").and_then(|t| t.as_f64()))
+                        .unwrap_or(0.0);
+
+                    let mapped_format = map_audio_format_name(acodec, ext);
+                    let multiplier = get_audio_multiplier(acodec, ext);
+                    let perceived_score = abr * multiplier;
+
+                    let abr_bucket = (abr / 10.0).round().max(1.0) as u64;
+                    let key = (mapped_format.clone(), abr_bucket);
+                    match audio_presets.get_mut(&key) {
+                        Some(entry) => {
+                            if perceived_score > entry.3 {
+                                *entry = (
+                                    format_id.to_string(),
+                                    mapped_format,
+                                    abr,
+                                    perceived_score,
+                                );
+                            }
+                        }
+                        None => {
+                            audio_presets.insert(
+                                key,
+                                (
+                                    format_id.to_string(),
+                                    mapped_format,
+                                    abr,
+                                    perceived_score,
+                                ),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    parsed_video_formats.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+
+    let mut parsed_audio_formats: Vec<_> = audio_presets.into_values().collect();
+    parsed_audio_formats.sort_by(|a, b| b.3.partial_cmp(&a.3).unwrap_or(std::cmp::Ordering::Equal));
+
+    let mut all_formats = Vec::new();
+
+    all_formats.push(FormatInfo {
+        media_type: "video".to_string(),
+        format: "mp4/webm".to_string(),
+        quality: "best".to_string(),
+        label: "Beste Qualität (Video)".to_string(),
+        filesize: None,
+    });
+
+    for (height, ext) in parsed_video_formats {
+        let filesize = info
+            .get("formats")
+            .and_then(|f| f.as_array())
+            .and_then(|arr| {
+                arr.iter().find(|fmt| {
+                    fmt.get("height").and_then(|h| h.as_u64()) == Some(height)
+                        && fmt.get("ext").and_then(|e| e.as_str()) == Some(&ext)
+                })
+            })
+            .and_then(|fmt| {
+                fmt.get("filesize")
+                    .and_then(|fs| fs.as_f64())
+                    .or_else(|| fmt.get("filesize_approx").and_then(|fs| fs.as_f64()))
+            })
+            .and_then(format_filesize);
+
+        all_formats.push(FormatInfo {
+            media_type: "video".to_string(),
+            format: ext.clone(),
+            quality: format!("{}p-{}", height, ext),
+            label: format!("{}p ({})", height, ext),
+            filesize,
+        });
+    }
+
+    all_formats.push(FormatInfo {
+        media_type: "audio".to_string(),
+        format: "best".to_string(),
+        quality: "best".to_string(),
+        label: "Beste Qualität (Audio)".to_string(),
+        filesize: None,
+    });
+
+    for (format_id, format_name, abr, _) in parsed_audio_formats {
+        let label = if abr > 0.0 {
+            format!("{} (~{:.0} kbps)", format_name.to_uppercase(), abr)
+        } else {
+            format_name.to_uppercase()
+        };
+
+        let filesize = info
+            .get("formats")
+            .and_then(|f| f.as_array())
+            .and_then(|arr| {
+                arr.iter()
+                    .find(|fmt| fmt.get("format_id").and_then(|id| id.as_str()) == Some(&format_id))
+            })
+            .and_then(|fmt| {
+                fmt.get("filesize")
+                    .and_then(|fs| fs.as_f64())
+                    .or_else(|| fmt.get("filesize_approx").and_then(|fs| fs.as_f64()))
+            })
+            .and_then(format_filesize);
+
+        all_formats.push(FormatInfo {
+            media_type: "audio".to_string(),
+            format: format_name,
+            quality: format_id,
+            label,
+            filesize,
+        });
+    }
+
+    all_formats
+}
+
 pub async fn analyze_video(
     State(state): State<SharedState>,
     headers: axum::http::HeaderMap,
@@ -441,150 +617,7 @@ pub async fn analyze_video(
     let duration_rem = duration_secs % 60;
     let duration = format!("{}:{:02}", duration_mins, duration_rem);
 
-    let mut parsed_video_formats = Vec::new();
-    let mut seen_video = std::collections::HashSet::new();
-
-    let mut parsed_audio_formats = Vec::new();
-    let mut seen_audio = std::collections::HashSet::new();
-
-    if let Some(formats) = info.get("formats").and_then(|f| f.as_array()) {
-        for fmt in formats {
-            let vcodec = fmt.get("vcodec").and_then(|v| v.as_str()).unwrap_or("none");
-            let acodec = fmt.get("acodec").and_then(|a| a.as_str()).unwrap_or("none");
-            let ext = fmt.get("ext").and_then(|e| e.as_str()).unwrap_or("unknown");
-
-            if ext == "mhtml" || ext == "unknown" {
-                continue;
-            }
-
-            if vcodec != "none" {
-                let height = fmt.get("height").and_then(|h| h.as_u64()).unwrap_or(0);
-                if height > 0 {
-                    let key = (height, ext.to_string());
-                    if seen_video.insert(key) {
-                        parsed_video_formats.push((height, ext.to_string()));
-                    }
-                }
-            } else if acodec != "none" {
-                let format_id = fmt
-                    .get("format_id")
-                    .and_then(|id| id.as_str())
-                    .unwrap_or("unknown");
-                if format_id != "unknown" {
-                    let abr = fmt
-                        .get("abr")
-                        .and_then(|a| a.as_f64())
-                        .or_else(|| fmt.get("tbr").and_then(|t| t.as_f64()))
-                        .unwrap_or(0.0);
-
-                    let mapped_format = map_audio_format_name(acodec, ext);
-                    let multiplier = get_audio_multiplier(acodec, ext);
-                    let perceived_score = abr * multiplier;
-
-                    let key = (mapped_format.clone(), format_id.to_string());
-                    if seen_audio.insert(key) {
-                        parsed_audio_formats.push((
-                            format_id.to_string(),
-                            mapped_format,
-                            abr,
-                            perceived_score,
-                        ));
-                    }
-                }
-            }
-        }
-    }
-
-    parsed_video_formats.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
-
-    parsed_audio_formats.sort_by(|a, b| b.3.partial_cmp(&a.3).unwrap_or(std::cmp::Ordering::Equal));
-
-    let mut all_formats = Vec::new();
-
-    fn format_filesize(bytes: f64) -> Option<String> {
-        if bytes <= 0.0 {
-            return None;
-        }
-        if bytes < 1024.0 * 1024.0 {
-            Some(format!("{:.1} KB", bytes / 1024.0))
-        } else if bytes < 1024.0 * 1024.0 * 1024.0 {
-            Some(format!("{:.1} MB", bytes / (1024.0 * 1024.0)))
-        } else {
-            Some(format!("{:.2} GB", bytes / (1024.0 * 1024.0 * 1024.0)))
-        }
-    }
-
-    all_formats.push(FormatInfo {
-        media_type: "video".to_string(),
-        format: "mp4/webm".to_string(),
-        quality: "best".to_string(),
-        label: "Beste Qualität (Video)".to_string(),
-        filesize: None,
-    });
-
-    for (height, ext) in parsed_video_formats {
-        let filesize = info
-            .get("formats")
-            .and_then(|f| f.as_array())
-            .and_then(|arr| {
-                arr.iter().find(|fmt| {
-                    fmt.get("height").and_then(|h| h.as_u64()) == Some(height)
-                        && fmt.get("ext").and_then(|e| e.as_str()) == Some(&ext)
-                })
-            })
-            .and_then(|fmt| {
-                fmt.get("filesize")
-                    .and_then(|fs| fs.as_f64())
-                    .or_else(|| fmt.get("filesize_approx").and_then(|fs| fs.as_f64()))
-            })
-            .and_then(format_filesize);
-
-        all_formats.push(FormatInfo {
-            media_type: "video".to_string(),
-            format: ext.clone(),
-            quality: format!("{}p-{}", height, ext),
-            label: format!("{}p ({})", height, ext),
-            filesize,
-        });
-    }
-
-    all_formats.push(FormatInfo {
-        media_type: "audio".to_string(),
-        format: "best".to_string(),
-        quality: "best".to_string(),
-        label: "Beste Qualität (Audio)".to_string(),
-        filesize: None,
-    });
-
-    for (format_id, format_name, abr, _) in parsed_audio_formats {
-        let label = if abr > 0.0 {
-            format!("{} (~{:.0} kbps)", format_name.to_uppercase(), abr)
-        } else {
-            format_name.to_uppercase()
-        };
-
-        let filesize = info
-            .get("formats")
-            .and_then(|f| f.as_array())
-            .and_then(|arr| {
-                arr.iter()
-                    .find(|fmt| fmt.get("format_id").and_then(|id| id.as_str()) == Some(&format_id))
-            })
-            .and_then(|fmt| {
-                fmt.get("filesize")
-                    .and_then(|fs| fs.as_f64())
-                    .or_else(|| fmt.get("filesize_approx").and_then(|fs| fs.as_f64()))
-            })
-            .and_then(format_filesize);
-
-        all_formats.push(FormatInfo {
-            media_type: "audio".to_string(),
-            format: format_name,
-            quality: format_id,
-            label,
-            filesize,
-        });
-    }
+    let all_formats = build_format_presets(&info);
 
     let description = info
         .get("description")
@@ -1214,5 +1247,261 @@ mod tests {
             let parsed: Result<axum::http::HeaderValue, _> = v.parse();
             assert!(parsed.is_ok(), "invalid cache header value: {}", v);
         }
+    }
+}
+
+// ============================================================================
+// Format preset grouping tests (dedup regression coverage)
+// ============================================================================
+#[cfg(test)]
+mod format_preset_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn video_stream(id: &str, height: u64, ext: &str, filesize: Option<f64>) -> serde_json::Value {
+        let mut v = json!({
+            "format_id": id,
+            "vcodec": "avc1.640028",
+            "acodec": "none",
+            "ext": ext,
+            "height": height,
+        });
+        if let Some(fs) = filesize {
+            v["filesize"] = json!(fs);
+        }
+        v
+    }
+
+    fn audio_stream(
+        id: &str,
+        acodec: &str,
+        ext: &str,
+        abr: Option<f64>,
+        tbr: Option<f64>,
+        filesize: Option<f64>,
+    ) -> serde_json::Value {
+        let mut v = json!({
+            "format_id": id,
+            "vcodec": "none",
+            "acodec": acodec,
+            "ext": ext,
+        });
+        if let Some(a) = abr {
+            v["abr"] = json!(a);
+        }
+        if let Some(t) = tbr {
+            v["tbr"] = json!(t);
+        }
+        if let Some(fs) = filesize {
+            v["filesize"] = json!(fs);
+        }
+        v
+    }
+
+    fn info_with_formats(formats: Vec<serde_json::Value>) -> serde_json::Value {
+        json!({ "id": "test", "formats": formats })
+    }
+
+    fn audio_presets(formats: &[FormatInfo]) -> Vec<&FormatInfo> {
+        formats
+            .iter()
+            .filter(|f| f.media_type == "audio" && f.quality != "best")
+            .collect()
+    }
+
+    fn video_presets(formats: &[FormatInfo]) -> Vec<&FormatInfo> {
+        formats
+            .iter()
+            .filter(|f| f.media_type == "video" && f.quality != "best")
+            .collect()
+    }
+
+    #[test]
+    fn test_duplicate_opus_streams_collapse_into_one_preset() {
+        // Regression: YouTube lists the same ~150 kbps Opus stream multiple times
+        // (DASH/HLS duplicates with distinct format_ids). Grouping must not key
+        // on format_id.
+        let info = info_with_formats(vec![
+            audio_stream("251", "opus", "webm", Some(150.0), None, Some(3_000_000.0)),
+            audio_stream("600", "opus", "webm", Some(150.0), None, Some(3_000_000.0)),
+            audio_stream("601", "opus", "webm", Some(150.4), None, Some(3_100_000.0)),
+        ]);
+
+        let presets = build_format_presets(&info);
+        let audio = audio_presets(&presets);
+
+        assert_eq!(
+            audio.len(),
+            1,
+            "identical Opus streams must collapse into one preset, got: {:?}",
+            audio.iter().map(|f| (&f.quality, &f.label)).collect::<Vec<_>>()
+        );
+        assert_eq!(audio[0].format, "opus");
+        assert!(audio[0].label.contains("150"), "label: {}", audio[0].label);
+    }
+
+    #[test]
+    fn test_near_identical_bitrates_share_a_bucket() {
+        // 149 and 151 kbps round into the same ~10 kbps bucket.
+        let info = info_with_formats(vec![
+            audio_stream("a1", "opus", "webm", Some(149.0), None, None),
+            audio_stream("b2", "opus", "webm", Some(151.0), None, None),
+        ]);
+
+        let presets = build_format_presets(&info);
+        let audio = audio_presets(&presets);
+
+        assert_eq!(audio.len(), 1);
+        // The higher-scored variant wins as the representative stream.
+        assert_eq!(audio[0].quality, "b2");
+        assert!(audio[0].label.contains("151"));
+    }
+
+    #[test]
+    fn test_best_variant_per_group_is_kept() {
+        let info = info_with_formats(vec![
+            audio_stream("low", "opus", "webm", Some(148.0), None, None),
+            audio_stream("high", "opus", "webm", Some(152.0), None, None),
+            audio_stream("mid", "opus", "webm", Some(149.5), None, None),
+        ]);
+
+        let presets = build_format_presets(&info);
+        let audio = audio_presets(&presets);
+
+        assert_eq!(audio.len(), 1);
+        assert_eq!(audio[0].quality, "high");
+    }
+
+    #[test]
+    fn test_distinct_codecs_and_tiers_survive_sorted_by_quality() {
+        let info = info_with_formats(vec![
+            audio_stream("140", "mp4a.40.2", "m4a", Some(128.0), None, None),
+            audio_stream("251", "opus", "webm", Some(160.0), None, None),
+            audio_stream("249", "opus", "webm", Some(70.0), None, None),
+        ]);
+
+        let presets = build_format_presets(&info);
+        let audio = audio_presets(&presets);
+
+        assert_eq!(audio.len(), 3);
+        // Perceived score desc: opus@160 > m4a@128 > opus@70
+        assert_eq!(audio[0].format, "opus");
+        assert!(audio[0].label.contains("160"));
+        assert_eq!(audio[1].format, "m4a");
+        assert!(audio[1].label.contains("128"));
+        assert_eq!(audio[2].format, "opus");
+        assert!(audio[2].label.contains("70"));
+    }
+
+    #[test]
+    fn test_tbr_fallback_used_when_abr_missing() {
+        let info = info_with_formats(vec![
+            audio_stream("999", "opus", "webm", None, Some(96.0), None),
+        ]);
+
+        let presets = build_format_presets(&info);
+        let audio = audio_presets(&presets);
+
+        assert_eq!(audio.len(), 1);
+        assert!(audio[0].label.contains("~96 kbps"), "label: {}", audio[0].label);
+    }
+
+    #[test]
+    fn test_video_streams_grouped_and_sorted_desc_by_height_then_ext() {
+        let mut info = info_with_formats(vec![
+            video_stream("137", 1080, "mp4", None),
+            video_stream("135", 720, "mp4", None),
+            video_stream("271", 1080, "webm", None),
+            video_stream("137-dup", 1080, "mp4", None), // duplicate
+            video_stream("313", 2160, "webm", None),
+        ]);
+        let mhtml = json!({
+            "format_id": "sb2",
+            "vcodec": "unknown",
+            "acodec": "none",
+            "ext": "mhtml",
+            "height": 720,
+        });
+        if let Some(arr) = info.get_mut("formats").and_then(|f| f.as_array_mut()) {
+            arr.push(mhtml);
+        }
+
+        let presets = build_format_presets(&info);
+        let video = video_presets(&presets);
+
+        let qualities: Vec<_> = video.iter().map(|f| f.quality.as_str()).collect();
+        assert_eq!(
+            qualities,
+            vec!["2160p-webm", "1080p-mp4", "1080p-webm", "720p-mp4"]
+        );
+        assert!(qualities.iter().all(|q| !q.contains("mhtml")));
+    }
+
+    #[test]
+    fn test_best_pseudo_entries_present_in_order() {
+        let info = info_with_formats(vec![
+            video_stream("137", 1080, "mp4", None),
+            audio_stream("251", "opus", "webm", Some(160.0), None, None),
+        ]);
+
+        let presets = build_format_presets(&info);
+
+        assert_eq!(presets[0].media_type, "video");
+        assert_eq!(presets[0].quality, "best");
+        assert_eq!(presets[0].label, "Beste Qualität (Video)");
+
+        let audio_best_idx = presets
+            .iter()
+            .position(|f| f.media_type == "audio" && f.quality == "best")
+            .expect("audio best entry must exist");
+        assert_eq!(presets[audio_best_idx].label, "Beste Qualität (Audio)");
+        // Audio best comes after all video presets.
+        assert!(audio_best_idx > presets.iter().position(|f| f.media_type == "video" && f.quality != "best").unwrap());
+    }
+
+    #[test]
+    fn test_filesize_lookup_uses_representative_stream() {
+        let info = info_with_formats(vec![
+            video_stream("137", 1080, "mp4", Some(52_428_800.0)), // 50 MB
+            audio_stream("251", "opus", "webm", Some(150.0), None, Some(3_145_728.0)), // 3 MB
+            audio_stream("249", "opus", "webm", Some(70.0), None, None),
+        ]);
+
+        let presets = build_format_presets(&info);
+
+        let v1080 = presets.iter().find(|f| f.quality == "1080p-mp4").unwrap();
+        assert_eq!(v1080.filesize.as_deref(), Some("50.0 MB"));
+
+        let opus150 = presets.iter().find(|f| f.quality == "251").unwrap();
+        assert_eq!(opus150.filesize.as_deref(), Some("3.0 MB"));
+
+        let opus70 = presets.iter().find(|f| f.quality == "249").unwrap();
+        assert_eq!(opus70.filesize, None);
+    }
+
+    #[test]
+    fn test_missing_or_empty_formats_array_yields_only_best_entries() {
+        let empty_info = json!({ "id": "x" });
+        let presets = build_format_presets(&empty_info);
+        assert_eq!(presets.len(), 2);
+        assert!(presets.iter().all(|f| f.quality == "best"));
+
+        let no_key = info_with_formats(vec![]);
+        assert_eq!(build_format_presets(&no_key).len(), 2);
+    }
+
+    #[test]
+    fn test_filesize_formatting_boundaries() {
+        assert_eq!(format_filesize(-1.0), None);
+        assert_eq!(format_filesize(0.0), None);
+        assert_eq!(format_filesize(512.0), Some("0.5 KB".to_string()));
+        assert_eq!(
+            format_filesize(1_572_864.0),
+            Some("1.5 MB".to_string())
+        );
+        assert_eq!(
+            format_filesize(1024.0 * 1024.0 * 1024.0 * 2.0),
+            Some("2.00 GB".to_string())
+        );
     }
 }

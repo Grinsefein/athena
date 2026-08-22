@@ -1,0 +1,475 @@
+//! Handler-level tests exercising the HTTP handlers directly.
+//!
+//! These tests never spawn yt-dlp and never touch the network: they call the
+//! handler functions with constructed extractors, or trigger paths that fail
+//! validation before any subprocess would be launched.
+
+use athena::handlers;
+use athena::models::{ApiResponse, ConfigResponse, DownloadRequest, LoginRequest, ShareRequest};
+use athena::state::{now_secs, AppState, SharedState, TOKEN_MAX_AGE_SECS};
+use axum::body::HttpBody;
+use axum::extract::{ConnectInfo, Path, Query, State};
+use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
+use axum::response::IntoResponse;
+use futures::StreamExt;
+use std::collections::HashMap;
+use std::net::SocketAddr;
+use std::sync::Arc;
+use tokio::sync::Mutex;
+
+fn fresh_state() -> SharedState {
+    Arc::new(AppState {
+        active_downloads: Mutex::new(HashMap::new()),
+        auth_tokens: Mutex::new(HashMap::new()),
+        active_children: Mutex::new(HashMap::new()),
+        login_attempts: Mutex::new(HashMap::new()),
+    })
+}
+
+fn auth_enabled() -> bool {
+    athena::state::PASSWORD_HASH.is_some()
+}
+
+fn bearer_headers(token: &str) -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::AUTHORIZATION,
+        HeaderValue::from_str(&format!("Bearer {}", token)).unwrap(),
+    );
+    headers
+}
+
+async fn register_token(state: &SharedState, token: &str) {
+    let mut tokens = state.auth_tokens.lock().await;
+    tokens.insert(token.to_string(), now_secs());
+}
+
+// ============================================================================
+// Static assets
+// ============================================================================
+
+#[tokio::test]
+async fn root_serves_embedded_frontend() {
+    let html = handlers::root().await.0;
+
+    assert!(html.contains("athenaApp"), "Alpine app must be embedded");
+    assert!(html.contains("results-mode"), "mobile results mode binding");
+    assert!(html.contains("qualitySelect"), "quality select control");
+    assert!(html.contains("dl-wrap"), "sticky download wrapper");
+}
+
+#[tokio::test]
+async fn frontend_redesign_regressions_are_absent() {
+    let html = handlers::root().await.0;
+
+    assert!(!html.contains("quality-grid"), "grid was replaced by select");
+    assert!(!html.contains("q-card"), "grid cards were removed");
+    assert!(!html.contains("best-stamp"), "old stamp marker was removed");
+    assert!(!html.contains("expand-btn"), "expander was removed");
+    assert!(
+        html.contains(".shell.results-mode .footer"),
+        "footer must be hidden in results view via CSS"
+    );
+}
+
+#[tokio::test]
+async fn manifest_served_as_json_with_cache_header() {
+    let response = handlers::manifest_handler().await.into_response();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers()[header::CONTENT_TYPE],
+        "application/json"
+    );
+    assert!(response.headers().contains_key(header::CACHE_CONTROL));
+}
+
+#[tokio::test]
+async fn service_worker_served_as_javascript_no_cache() {
+    let response = handlers::sw_handler().await.into_response();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(
+        response.headers()[header::CONTENT_TYPE],
+        "application/javascript"
+    );
+    assert_eq!(response.headers()[header::CACHE_CONTROL], "no-cache");
+}
+
+#[tokio::test]
+async fn icon_served_as_png() {
+    let response = handlers::icon_handler().await.into_response();
+
+    assert_eq!(response.headers()[header::CONTENT_TYPE], "image/png");
+    assert!(
+        response.body().size_hint().exact().unwrap_or(0) > 0,
+        "icon bytes must be embedded"
+    );
+}
+
+// ============================================================================
+// Config
+// ============================================================================
+
+#[tokio::test]
+async fn config_reports_success_and_auth_state() {
+    let Json(ApiResponse { success, data, .. }) = handlers::get_config().await;
+
+    assert!(success);
+    let data: ConfigResponse = data.expect("config data present");
+    assert_eq!(data.auth_enabled, auth_enabled());
+}
+
+use axum::Json;
+
+// ============================================================================
+// Share endpoint (redirect logic)
+// ============================================================================
+
+fn share_request(url: Option<String>, text: Option<String>) -> axum::Json<ShareRequest> {
+    Json(ShareRequest {
+        url,
+        text,
+        title: None,
+    })
+}
+
+fn location_of(response: axum::response::Response) -> String {
+    response
+        .headers()
+        .get(header::LOCATION)
+        .map(|v| v.to_str().unwrap().to_string())
+        .unwrap_or_default()
+}
+
+#[tokio::test]
+async fn share_redirects_with_url_param() {
+    let response = handlers::handle_share(share_request(
+        Some("https://youtu.be/dQw4w9WgXcQ".to_string()),
+        None,
+    ))
+    .await
+    .into_response();
+
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let location = location_of(response);
+    assert!(location.starts_with("/?share=https%3A%2F%2Fyoutu.be%2F"));
+}
+
+#[tokio::test]
+async fn share_extracts_first_url_from_text() {
+    let response = handlers::handle_share(share_request(
+        None,
+        Some("Check this out https://example.com/watch?v=abc nice".to_string()),
+    ))
+    .await
+    .into_response();
+
+    assert_eq!(response.status(), StatusCode::SEE_OTHER);
+    let location = location_of(response);
+    assert!(location.starts_with("/?share="));
+    assert!(location.contains("https%3A%2F%2Fexample.com%2Fwatch"));
+}
+
+#[tokio::test]
+async fn share_without_url_falls_back_to_root() {
+    for request in [
+        share_request(None, None),
+        share_request(Some("not a url".to_string()), None),
+        share_request(None, Some("just plain words".to_string())),
+    ] {
+        let response = handlers::handle_share(request).await.into_response();
+        assert_eq!(response.status(), StatusCode::SEE_OTHER);
+        assert_eq!(location_of(response), "/");
+    }
+}
+
+// ============================================================================
+// Analyze / Download validation (fails before any subprocess starts)
+// ============================================================================
+
+fn download_request(url: &str) -> Json<DownloadRequest> {
+    Json(DownloadRequest {
+        url: url.to_string(),
+        format: "video".to_string(),
+        quality: "best".to_string(),
+        playlist_urls: None,
+    })
+}
+
+#[tokio::test]
+async fn analyze_rejects_invalid_url_before_subprocess() {
+    let state = fresh_state();
+
+    for bad in ["ftp://example.com/v", "", "--config-file=/tmp/evil"] {
+        let result =
+            handlers::analyze_video(State(state.clone()), HeaderMap::new(), download_request(bad))
+                .await;
+
+        match result {
+            Err(athena::AppError::InvalidUrl { .. }) => {}
+            other => panic!("expected InvalidUrl for {:?}, got {:?}", bad, other.map(|_| ())),
+        }
+    }
+
+    // Nothing may have been queued.
+    assert!(state.active_downloads.lock().await.is_empty());
+}
+
+#[tokio::test]
+async fn start_download_rejects_invalid_playlist_urls_before_subprocess() {
+    let state = fresh_state();
+
+    let request = Json(DownloadRequest {
+        url: "https://www.youtube.com/watch?v=abc".to_string(),
+        format: "video".to_string(),
+        quality: "best".to_string(),
+        playlist_urls: Some(vec![
+            "https://www.youtube.com/watch?v=ok".to_string(),
+            "javascript:alert(1)".to_string(),
+        ]),
+    });
+
+    let result = handlers::start_download(State(state.clone()), HeaderMap::new(), request).await;
+    assert!(matches!(result, Err(athena::AppError::InvalidUrl { .. })));
+    assert!(state.active_downloads.lock().await.is_empty());
+}
+
+// ============================================================================
+// Progress / file endpoints for unknown downloads
+// ============================================================================
+
+const TOKEN: &str = "handler-test-token";
+
+#[tokio::test]
+async fn progress_stream_reports_missing_download() {
+    let state = fresh_state();
+    register_token(&state, TOKEN).await;
+
+    let sse = handlers::progress_stream(
+        State(state),
+        bearer_headers(TOKEN),
+        Path("missing-id".to_string()),
+        Query(HashMap::new()),
+    )
+    .await;
+
+    let body = sse.into_response().into_body();
+    let first_chunk = body
+        .into_data_stream()
+        .next()
+        .await
+        .expect("at least one SSE event")
+        .expect("chunk readable");
+    let text = String::from_utf8_lossy(&first_chunk);
+
+    assert!(text.contains("Download not found"), "got: {}", text);
+}
+
+#[tokio::test]
+async fn download_file_unknown_id_is_not_found() {
+    let state = fresh_state();
+    register_token(&state, TOKEN).await;
+
+    let result = handlers::download_file(
+        State(state.clone()),
+        bearer_headers(TOKEN),
+        Path("missing-id".to_string()),
+        Query(HashMap::new()),
+    )
+    .await;
+
+    match result {
+        Err(athena::AppError::DownloadNotFound { id }) => {
+            assert_eq!(id, "missing-id");
+            let response = athena::AppError::DownloadNotFound { id }.into_response();
+            assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        }
+        other => panic!("expected DownloadNotFound, got {:?}", other.map(|_| ())),
+    }
+}
+
+#[tokio::test]
+async fn download_file_not_ready_is_404_for_queued_status() {
+    use athena::state::DownloadInfo;
+
+    let state = fresh_state();
+    register_token(&state, TOKEN).await;
+    {
+        let mut downloads = state.active_downloads.lock().await;
+        downloads.insert(
+            "pending-id".to_string(),
+            DownloadInfo {
+                status: "processing".to_string(),
+                progress: 10.0,
+                file_path: None,
+                file_name: None,
+                error: None,
+                timestamp: now_secs(),
+                speed: None,
+                eta: None,
+            },
+        );
+    }
+
+    let result = handlers::download_file(
+        State(state),
+        bearer_headers(TOKEN),
+        Path("pending-id".to_string()),
+        Query(HashMap::new()),
+    )
+    .await;
+
+    match result {
+        Err(athena::AppError::DownloadNotReady { status }) => {
+            assert_eq!(status, "processing");
+            let response =
+                athena::AppError::DownloadNotReady { status }.into_response();
+            assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        }
+        other => panic!("expected DownloadNotReady, got {:?}", other.map(|_| ())),
+    }
+}
+
+// ============================================================================
+// Authentication
+// ============================================================================
+
+#[tokio::test]
+async fn is_authenticated_with_registered_token() {
+    let state = fresh_state();
+    register_token(&state, TOKEN).await;
+
+    // A registered token is accepted regardless of whether auth is enabled.
+    assert!(
+        handlers::is_authenticated(&bearer_headers(TOKEN), None, &state).await,
+        "registered token must authenticate"
+    );
+}
+
+#[tokio::test]
+async fn is_authenticated_expiry_boundary_respected() {
+    let state = fresh_state();
+    let now = now_secs();
+    {
+        let mut tokens = state.auth_tokens.lock().await;
+        tokens.insert("expired-token".to_string(), now - TOKEN_MAX_AGE_SECS - 1.0);
+        tokens.insert("fresh-token".to_string(), now);
+    }
+
+    if auth_enabled() {
+        assert!(!handlers::is_authenticated(
+            &bearer_headers("expired-token"),
+            None,
+            &state
+        )
+        .await);
+        assert!(handlers::is_authenticated(
+            &bearer_headers("fresh-token"),
+            None,
+            &state
+        )
+        .await);
+    } else {
+        // Without auth enabled everything is allowed by design.
+        assert!(handlers::is_authenticated(
+            &bearer_headers("expired-token"),
+            None,
+            &state
+        )
+        .await);
+    }
+}
+
+fn login_addr() -> ConnectInfo<SocketAddr> {
+    ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 45_820)))
+}
+
+#[tokio::test]
+async fn login_password_flow_matches_auth_mode() {
+    let state = fresh_state();
+
+    if auth_enabled() {
+        // Wrong password must be rejected.
+        let wrong = handlers::login(
+            State(state.clone()),
+            login_addr(),
+            Json(LoginRequest {
+                password: "definitely-wrong-password".to_string(),
+            }),
+        )
+        .await;
+        match wrong {
+            Err(athena::AppError::Unauthorized { message }) => {
+                assert!(message.contains("Invalid password"));
+            }
+            Ok(_) => panic!("wrong password must be rejected"),
+            other => panic!("unexpected error variant: {:?}", other.err()),
+        }
+
+        // Correct password (whatever ATHENA_PASSWORD is) must issue a token.
+        let password = std::env::var("ATHENA_PASSWORD").unwrap_or_default();
+        let correct = handlers::login(
+            State(state.clone()),
+            login_addr(),
+            Json(LoginRequest { password }),
+        )
+        .await;
+        match correct {
+            Ok(Json(ApiResponse { success, data, .. })) => {
+                assert!(success);
+                assert!(!data.expect("token present").token.is_empty());
+            }
+            Err(e) => panic!("valid login must succeed, got: {}", e),
+        }
+    } else {
+        let response = handlers::login(
+            State(state.clone()),
+            login_addr(),
+            Json(LoginRequest {
+                password: "anything".to_string(),
+            }),
+        )
+        .await
+        .expect("login succeeds without auth");
+
+        let Json(ApiResponse { success, data, .. }) = response;
+        assert!(success);
+        assert_eq!(data.expect("token").token, "");
+    }
+}
+
+#[tokio::test]
+async fn login_rate_limiting_blocks_after_max_attempts() {
+    let state = fresh_state();
+    let addr = login_addr();
+
+    for attempt in 0..6usize {
+        let result = handlers::login(
+            State(state.clone()),
+            addr.clone(),
+            Json(LoginRequest {
+                password: format!("guess-{}", attempt),
+            }),
+        )
+        .await;
+
+        if auth_enabled() && attempt >= 5 {
+            match result {
+                Err(err) => {
+                    assert!(
+                        err.to_string().contains("Zu viele Fehlversuche"),
+                        "rate limit message expected, got: {}",
+                        err
+                    );
+                }
+                Ok(_) => panic!("6th attempt must be rate limited"),
+            }
+        }
+    }
+
+    let attempts = state.login_attempts.lock().await;
+    if auth_enabled() {
+        assert!(!attempts.is_empty(), "failed attempts must be recorded");
+    }
+}

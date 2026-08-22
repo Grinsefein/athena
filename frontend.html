@@ -170,6 +170,38 @@
         }
         .tagline { margin: 0.4rem 0 0; color: var(--muted); font-weight: 500; font-size: clamp(0.9rem, 1.5vw, 1rem); }
 
+        /* ---------- Mobile: flat layout, no nested cards ---------- */
+        @media (max-width: 639px) {
+            .shell { padding-left: 0; padding-right: 0; }
+            .card { background: transparent; border-color: transparent; box-shadow: none; border-radius: 0; }
+            .card-body { padding: 0 1rem; }
+
+            /* Results mode: hide hero, tighten vertical rhythm, clear sticky bar */
+            .shell.results-mode .hero { display: none; }
+            .shell.results-mode { padding-bottom: calc(var(--safe-bottom) + 6rem); }
+            .shell.results-mode .result { margin-top: 1.25rem; gap: 1rem; }
+            .shell.results-mode .media { gap: 0.7rem; padding: 0.6rem; }
+            .shell.results-mode .thumb { width: 96px; }
+
+            /* Sticky primary action */
+            .dl-wrap {
+                position: fixed;
+                left: 0;
+                right: 0;
+                bottom: 0;
+                z-index: 30;
+                padding: 0.6rem max(1rem, env(safe-area-inset-left)) calc(0.6rem + var(--safe-bottom));
+                background: var(--bg);
+                background: color-mix(in srgb, var(--bg) 88%, transparent);
+                backdrop-filter: blur(14px);
+                -webkit-backdrop-filter: blur(14px);
+                border-top: 1px solid var(--border);
+            }
+        }
+
+        /* Footer hidden while results are shown (all viewports) */
+        .shell.results-mode .footer { display: none; }
+
         /* ---------- Card ---------- */
         .card {
             background: var(--surface);
@@ -181,34 +213,43 @@
         .card-body { padding: 1.25rem; }
         @media (min-width: 640px) { .card-body { padding: 2.5rem; } }
 
-        /* ---------- URL input ---------- */
-        .input-row { position: relative; }
-        .url-input {
-            width: 100%;
-            padding: 0.95rem 3.6rem 0.95rem 1rem;
-            border-radius: var(--r-lg);
-            border: 1px solid var(--border);
+        /* ---------- URL input group ---------- */
+        .input-row {
+            position: relative;
+            display: flex;
+            align-items: center;
             background: var(--surface-2);
+            border: 1px solid var(--border);
+            border-radius: var(--r-lg);
+            transition: border-color 0.15s ease, box-shadow 0.15s ease, background-color 0.25s ease;
+        }
+        .input-row:focus-within {
+            border-color: var(--brand-500);
+            box-shadow: 0 0 0 4px rgba(109, 129, 240, 0.18);
+        }
+        .url-input {
+            flex: 1;
+            min-width: 0;
+            padding: 0.95rem 0.5rem 0.95rem 1.1rem;
+            border: none;
+            background: transparent;
             color: var(--text);
             font-size: 0.95rem;
             font-weight: 500;
             appearance: none;
             outline: none;
-            transition: border-color 0.15s ease, box-shadow 0.15s ease, background-color 0.25s ease;
         }
         .url-input::placeholder { color: var(--faint); }
-        .url-input:focus { border-color: var(--brand-500); box-shadow: 0 0 0 4px rgba(109, 129, 240, 0.18); }
         .url-input:disabled { opacity: 0.6; }
         @media (min-width: 640px) {
-            .url-input { font-size: 1.0625rem; padding: 1.15rem 4.2rem 1.15rem 1.5rem; }
+            .url-input { font-size: 1.0625rem; padding: 1.15rem 0.5rem 1.15rem 1.4rem; }
         }
         .go-btn {
-            position: absolute;
-            top: 0.4rem;
-            right: 0.4rem;
-            bottom: 0.4rem;
-            min-width: 44px;
-            padding: 0 0.85rem;
+            flex-shrink: 0;
+            margin-right: 0.35rem;
+            min-width: 46px;
+            min-height: 46px;
+            padding: 0.55rem 0.9rem;
             border: none;
             border-radius: 11px;
             background: var(--brand-600);
@@ -298,22 +339,26 @@
             font-size: 0.95rem;
             font-weight: 700;
             line-height: 1.35;
+            overflow-wrap: anywhere;
+        }
+        .media-meta {
+            margin: 0.2rem 0 0;
+            display: flex;
+            align-items: center;
+            gap: 0.4rem;
+            font-size: 0.78rem;
+            color: var(--muted);
+            font-weight: 500;
             white-space: nowrap;
             overflow: hidden;
-            text-overflow: ellipsis;
         }
-        .media-author, .media-duration {
-            margin: 0.15rem 0 0;
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-        }
-        .media-author { font-size: 0.8125rem; color: var(--muted); font-weight: 500; }
-        .media-duration { font-size: 0.6875rem; color: var(--faint); font-weight: 500; }
+        .media-meta .author { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+        .meta-dot { color: var(--faint); flex-shrink: 0; }
+        .media-meta .dur { flex-shrink: 0; font-size: 0.72rem; color: var(--faint); font-weight: 600; }
         @media (min-width: 640px) {
             .media-title { font-size: 1.125rem; }
-            .media-author { font-size: 0.875rem; }
-            .media-duration { font-size: 0.75rem; }
+            .media-meta { font-size: 0.875rem; }
+            .media-meta .dur { font-size: 0.78rem; }
         }
 
         /* ---------- Section label ---------- */
@@ -365,76 +410,51 @@
         .segmented button[aria-pressed="true"] { color: var(--brand-700); }
         html.dark .segmented button[aria-pressed="true"] { color: var(--brand-400); }
 
-        /* ---------- Quality grid ---------- */
-        .quality-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 0.5rem; }
-        @media (min-width: 480px) { .quality-grid { grid-template-columns: repeat(3, 1fr); gap: 0.65rem; } }
-        .q-card {
-            position: relative;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            gap: 2px;
-            min-height: 64px;
-            padding: 0.5rem 0.75rem;
-            border-radius: 14px;
+        /* ---------- Quality select ---------- */
+        .select-row { position: relative; }
+        .quality-select {
+            width: 100%;
+            min-height: 52px;
+            padding: 0.8rem 2.9rem 0.8rem 1rem;
+            border-radius: var(--r-lg);
             border: 1px solid var(--border);
             background: var(--surface-2);
             color: var(--text);
-            text-align: center;
+            font-family: inherit;
+            font-size: 0.95rem;
+            font-weight: 600;
+            appearance: none;
+            outline: none;
             cursor: pointer;
-            overflow: hidden;
-            transition: transform 0.15s ease, background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+            transition: border-color 0.15s ease, box-shadow 0.15s ease, background-color 0.25s ease;
         }
-        @media (min-width: 480px) { .q-card { min-height: 84px; border-radius: var(--r-lg); } }
-        .q-card:hover { background: var(--surface-3); border-color: var(--border-strong); }
-        .q-card:active { transform: scale(0.97); }
-        .q-card.active {
-            background: var(--brand-600);
-            border-color: var(--brand-600);
-            color: #fff;
-            box-shadow: 0 10px 26px -8px var(--brand-glow);
-            transform: translateY(-1px);
+        .quality-select:focus {
+            border-color: var(--brand-500);
+            box-shadow: 0 0 0 4px rgba(109, 129, 240, 0.18);
         }
-        .q-name { font-size: 0.8125rem; font-weight: 650; overflow-wrap: anywhere; }
-        .q-card.active .q-name { font-weight: 800; }
-        .q-size { font-size: 0.6875rem; opacity: 0.75; }
-        .best-stamp {
+        .quality-select:disabled { opacity: 0.6; cursor: default; }
+        .select-chevron {
             position: absolute;
-            top: 8px;
-            right: -19px;
-            width: 64px;
-            padding: 2px 0;
-            transform: rotate(45deg);
-            background: #f59e0b;
-            color: #fff;
-            font-size: 8px;
-            font-weight: 900;
-            letter-spacing: 0.06em;
-            text-transform: uppercase;
-            text-align: center;
-            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+            right: 1rem;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 18px;
+            height: 18px;
+            color: var(--muted);
+            pointer-events: none;
         }
-        .expand-row { text-align: center; margin-top: 0.75rem; }
-        .expand-btn {
-            display: inline-flex;
-            align-items: center;
-            gap: 0.3rem;
-            min-height: 44px;
-            padding: 0 0.75rem;
-            border: none;
-            background: transparent;
-            color: var(--brand-600);
-            font-size: 0.8125rem;
-            font-weight: 700;
-            cursor: pointer;
-            border-radius: var(--r-md);
-            transition: color 0.15s ease;
+        .size-hint {
+            margin: 0.45rem 0.125rem 0;
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: var(--faint);
         }
-        html.dark .expand-btn { color: var(--brand-400); }
-        .expand-btn:hover { color: var(--brand-700); }
-        .expand-btn svg { width: 16px; height: 16px; transition: transform 0.2s ease; }
-        .expand-btn svg.open { transform: rotate(180deg); }
+
+        /* Slide-in when switching format (mirrors segmented indicator) */
+        @keyframes sel-in-right { from { opacity: 0; transform: translateX(20px); } }
+        @keyframes sel-in-left { from { opacity: 0; transform: translateX(-20px); } }
+        .sel-slide-right { animation: sel-in-right 0.28s cubic-bezier(0.4, 0, 0.2, 1); }
+        .sel-slide-left { animation: sel-in-left 0.28s cubic-bezier(0.4, 0, 0.2, 1); }
 
         /* ---------- Playlist panel ---------- */
         .playlist-panel {
@@ -753,7 +773,7 @@
         </div>
     </div>
 
-    <main class="shell">
+    <main class="shell" :class="{ 'results-mode': videoInfo }">
         <div class="wrap">
 
             <!-- Header -->
@@ -796,8 +816,11 @@
                             <img :src="videoInfo?.thumbnail || ''" alt="" class="thumb" loading="lazy" decoding="async">
                             <div class="media-info">
                                 <h3 class="media-title" x-text="videoInfo?.title"></h3>
-                                <p class="media-author" x-text="videoInfo?.author"></p>
-                                <p class="media-duration" x-show="videoInfo?.duration" x-text="formatDuration(videoInfo?.duration)"></p>
+                                <p class="media-meta">
+                                    <span class="author" x-text="videoInfo?.author"></span>
+                                    <span class="meta-dot" x-show="videoInfo?.duration">&bull;</span>
+                                    <span class="dur" x-show="videoInfo?.duration" x-text="formatDuration(videoInfo?.duration)"></span>
+                                </p>
                             </div>
                         </div>
 
@@ -811,32 +834,23 @@
                             </div>
                         </div>
 
-                        <!-- Quality Grid -->
+                        <!-- Quality Select -->
                         <div>
-                            <label class="label">Qualität wählen</label>
-                            <div class="quality-grid">
-                                <template x-for="(fmt, idx) in getVisibleFormats()" :key="fmt.quality">
-                                    <button type="button" @click="quality = fmt.quality" class="q-card"
-                                            :class="{ active: quality === fmt.quality }"
-                                            :aria-pressed="quality === fmt.quality">
-                                        <template x-if="idx === 0">
-                                            <div class="best-stamp" aria-label="Empfohlen">Best ⭐</div>
-                                        </template>
-                                        <span class="q-name" x-text="fmt.label + (idx === 0 ? ' ⭐' : '')"></span>
-                                        <span class="q-size" x-show="fmt.filesize" x-text="fmt.filesize"></span>
-                                    </button>
-                                </template>
+                            <label class="label" for="qualitySelect">Qualität</label>
+                            <div class="select-row" :class="'sel-slide-' + formatSlide">
+                                <select id="qualitySelect" class="quality-select" x-model="quality"
+                                        aria-label="Qualität wählen">
+                                    <template x-for="fmt in getFilteredFormats()" :key="fmt.quality">
+                                        <option :value="fmt.quality" x-text="optionLabel(fmt)"
+                                                :selected="fmt.quality === quality"></option>
+                                    </template>
+                                </select>
+                                <svg class="select-chevron" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M19 9l-7 7-7-7"/>
+                                </svg>
                             </div>
-
-                            <div x-show="getFilteredFormats().length > 3" class="expand-row" x-cloak>
-                                <button type="button" class="expand-btn" @click="toggleExpanded()"
-                                        :aria-expanded="isExpanded()">
-                                    <span x-text="isExpanded() ? 'Weniger Formate anzeigen' : 'Mehr Formate anzeigen'"></span>
-                                    <svg :class="{ open: isExpanded() }" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-                                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M19 9l-7 7-7-7"/>
-                                    </svg>
-                                </button>
-                            </div>
+                            <p class="size-hint" x-show="selectedFormat?.filesize"
+                               x-text="selectedFormat?.filesize ? `Ungefähre Dateigröße: ${selectedFormat.filesize}` : ''"></p>
                         </div>
 
                         <!-- Playlist Selection -->
@@ -859,8 +873,8 @@
                             <p class="playlist-count" x-text="`${selectedPlaylistUrls.length} von ${videoInfo?.playlist_videos?.length || 0} Videos ausgewählt`"></p>
                         </div>
 
-                        <!-- Action Button -->
-                        <div>
+                        <!-- Action Button (sticky bottom bar on mobile) -->
+                        <div class="dl-wrap">
                             <button type="button" class="dl-btn" @click="download()" :disabled="downloading || completed"
                                     :aria-busy="downloading">
                                 <div x-show="downloading && !queued && progress > 0" class="dl-progress"
@@ -910,6 +924,7 @@
             return {
                 url: '',
                 format: 'video',
+                formatSlide: 'right',
                 quality: 'best',
                 loading: false,
                 downloading: false,
@@ -933,8 +948,6 @@
                 checkingUpdate: false,
                 toasts: [],
                 selectedPlaylistUrls: [],
-                videoExpanded: false,
-                audioExpanded: false,
                 debounceTimeout: null,
 
                 selectAllPlaylist(val) {
@@ -971,29 +984,31 @@
 
                 getFilteredFormats() {
                     if (!this.videoInfo || !this.videoInfo.formats) return [];
-                    return this.videoInfo.formats.filter(f => f.media_type === this.format && f.quality !== 'best');
+                    const seen = new Set();
+                    return this.videoInfo.formats.filter(f => {
+                        if (f.media_type !== this.format) return false;
+                        const key = `${f.label}|${f.format}|${f.filesize || ''}`;
+                        if (seen.has(key)) return false;
+                        seen.add(key);
+                        return true;
+                    });
                 },
 
-                getVisibleFormats() {
-                    const fmts = this.getFilteredFormats();
-                    return this.isExpanded() ? fmts : fmts.slice(0, 3);
+                get selectedFormat() {
+                    return this.getFilteredFormats().find(f => f.quality === this.quality) || null;
                 },
 
-                isExpanded() {
-                    return this.format === 'video' ? this.videoExpanded : this.audioExpanded;
-                },
-
-                toggleExpanded() {
-                    if (this.format === 'video') this.videoExpanded = !this.videoExpanded;
-                    else this.audioExpanded = !this.audioExpanded;
+                optionLabel(fmt) {
+                    return fmt.filesize ? `${fmt.label} · ${fmt.filesize}` : fmt.label;
                 },
 
                 selectDefaultQuality(fmtType) {
+                    if (this.format !== fmtType) {
+                        const order = ['video', 'audio'];
+                        this.formatSlide = order.indexOf(fmtType) > order.indexOf(this.format) ? 'right' : 'left';
+                    }
                     this.format = fmtType;
-                    const formats = this.videoInfo
-                        ? this.videoInfo.formats.filter(f => f.media_type === fmtType && f.quality !== 'best')
-                        : [];
-                    this.quality = formats.length > 0 ? formats[0].quality : 'best';
+                    this.quality = 'best';
                 },
 
                 formatDuration(val) {
@@ -1294,6 +1309,7 @@
                     this.url = '';
                     this.videoInfo = null;
                     this.format = 'video';
+                    this.formatSlide = 'right';
                     this.quality = 'best';
                     this.downloading = false;
                     this.completed = false;
@@ -1305,8 +1321,6 @@
                     this.downloadId = null;
                     this.downloadUrl = null;
                     this.selectedPlaylistUrls = [];
-                    this.videoExpanded = false;
-                    this.audioExpanded = false;
                     this.closeSSE();
                 }
             }

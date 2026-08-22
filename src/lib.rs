@@ -4,5 +4,9 @@
 //! with rich error handling and type-safe abstractions.
 
 pub mod errors;
+pub mod handlers;
+pub mod models;
+pub mod state;
+pub mod ytdlp;
 
 pub use errors::{AppError, AppResult, ErrorResponse};

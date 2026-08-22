@@ -23,6 +23,7 @@ fn fresh_state() -> SharedState {
         auth_tokens: Mutex::new(HashMap::new()),
         active_children: Mutex::new(HashMap::new()),
         login_attempts: Mutex::new(HashMap::new()),
+        metadata_cache: Mutex::new(HashMap::new()),
     })
 }
 

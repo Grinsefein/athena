@@ -1,9 +1,9 @@
 import { get } from 'svelte/store';
 import {
   auth, toasts, loading, downloading, queued, completed, progress, speed, eta,
-  errorMsg, videoInfo, selectedFormat, formatSlide, selectedQuality,
+  errorMsg, videoInfo, lastAnalyzedUrl, selectedFormat, formatSlide, selectedQuality,
   selectedPlaylistUrls, downloadId, downloadUrl, checkingUpdate, urlInput,
-  cleanUrl, connectSSE, closeSSE
+  cleanUrl, isValidUrl, connectSSE, closeSSE
 } from './stores.js';
 
 export async function checkConfig() {
@@ -39,8 +39,17 @@ export async function login(password) {
   }
 }
 
+let analyzeController = null;
+let pendingAuto = false;
+
 export async function analyzeVideo(url) {
-  if (!url || get(loading)) return;
+  const targetUrl = url ? cleanUrl(String(url).trim()) : '';
+  if (!isValidUrl(targetUrl)) return;
+
+  if (analyzeController) analyzeController.abort();
+  analyzeController = new AbortController();
+  const signal = analyzeController.signal;
+
   loading.set(true);
   errorMsg.set(null);
   closeSSE();
@@ -48,7 +57,6 @@ export async function analyzeVideo(url) {
   completed.set(false);
 
   const authState = get(auth);
-  const targetUrl = cleanUrl(url.trim());
 
   try {
     const response = await fetch('/api/analyze', {
@@ -57,7 +65,8 @@ export async function analyzeVideo(url) {
         'Content-Type': 'application/json',
         ...(authState.token && { 'Authorization': `Bearer ${authState.token}` })
       },
-      body: JSON.stringify({ url: targetUrl })
+      body: JSON.stringify({ url: targetUrl }),
+      signal
     });
 
     let data;
@@ -71,6 +80,7 @@ export async function analyzeVideo(url) {
     }
 
     videoInfo.set(data.data);
+    lastAnalyzedUrl.set(targetUrl);
     selectedFormat.set('video');
     formatSlide.set('right');
     selectedQuality.set('best');
@@ -82,13 +92,44 @@ export async function analyzeVideo(url) {
     }
     toasts.add('Analyse erfolgreich!', 'success');
   } catch (e) {
-    if (e.message !== 'Nicht angemeldet') {
+    if (e.name === 'AbortError') return;
+    if (analyzeController && analyzeController.signal === signal && e.message !== 'Nicht angemeldet') {
       const msg = 'Video konnte nicht analysiert werden. Bitte Link prüfen.';
       errorMsg.set(msg);
       toasts.add(msg, 'error');
     }
   } finally {
-    loading.set(false);
+    if (analyzeController && analyzeController.signal === signal) {
+      loading.set(false);
+      runPendingAutoAnalyze();
+    }
+  }
+}
+
+// Auto-analyze path used by the input debounce. Skips when the exact URL was
+// already analyzed; defers (once) while another analysis is still running.
+export function maybeAutoAnalyze(input) {
+  const value = (input || '').trim();
+  if (!value || !isValidUrl(value)) return;
+  if (get(loading)) {
+    pendingAuto = true;
+    return;
+  }
+  if (get(lastAnalyzedUrl) === cleanUrl(value)) return;
+  analyzeVideo(value);
+}
+
+function runPendingAutoAnalyze() {
+  if (!pendingAuto) return;
+  pendingAuto = false;
+  maybeAutoAnalyze(get(urlInput));
+}
+
+export function resetPendingAnalysis() {
+  pendingAuto = false;
+  if (analyzeController) {
+    analyzeController.abort();
+    analyzeController = null;
   }
 }
 
@@ -173,8 +214,10 @@ export async function checkYtdlpUpdate() {
 }
 
 export function resetApp() {
+  resetPendingAnalysis();
   urlInput.set('');
   videoInfo.set(null);
+  lastAnalyzedUrl.set(null);
   selectedFormat.set('video');
   formatSlide.set('right');
   selectedQuality.set('best');

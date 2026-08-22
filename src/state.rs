@@ -53,17 +53,89 @@ pub static DOWNLOAD_SEMAPHORE: Lazy<Arc<Semaphore>> = Lazy::new(|| {
     Arc::new(Semaphore::new(max))
 });
 
+// Global semaphore for concurrent analyze calls (each spawns real yt-dlp processes)
+pub static ANALYZE_SEMAPHORE: Lazy<Arc<Semaphore>> = Lazy::new(|| {
+    let max = std::env::var("MAX_CONCURRENT_ANALYZE")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(2);
+    Arc::new(Semaphore::new(max))
+});
+
+// TTL for cached yt-dlp metadata (in hours)
+pub static META_CACHE_TTL_HOURS: Lazy<f64> = Lazy::new(|| {
+    std::env::var("META_CACHE_TTL_HOURS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(6.0)
+});
+
+pub const META_CACHE_MAX_ENTRIES: usize = 128;
+
 pub const TOKEN_MAX_AGE_SECS: f64 = 30.0 * 24.0 * 3600.0;
 pub const LOGIN_WINDOW_SECS: f64 = 900.0;
 pub const MAX_LOGIN_ATTEMPTS: usize = 5;
 
 pub type SharedState = Arc<AppState>;
 
+#[derive(Clone, Debug)]
+pub struct CachedMeta {
+    pub json: serde_json::Value,
+    pub fetched_at: f64,
+}
+
 pub struct AppState {
     pub active_downloads: Mutex<HashMap<String, DownloadInfo>>,
     pub auth_tokens: Mutex<HashMap<String, f64>>, // Token -> creation timestamp
     pub active_children: Mutex<HashMap<String, tokio::process::Child>>, // Active yt-dlp child processes
     pub login_attempts: Mutex<HashMap<String, Vec<f64>>>, // Login rate-limiting timestamps by IP
+    pub metadata_cache: Mutex<HashMap<String, CachedMeta>>, // canonical URL -> yt-dlp info JSON
+}
+
+fn evict_metadata_cache(cache: &mut HashMap<String, CachedMeta>) -> usize {
+    let now = now_secs();
+    let ttl_secs = *META_CACHE_TTL_HOURS * 3600.0;
+    cache.retain(|_, meta| now - meta.fetched_at < ttl_secs);
+
+    let mut removed = 0;
+    if cache.len() >= META_CACHE_MAX_ENTRIES {
+        let oldest = cache
+            .iter()
+            .min_by(|a, b| {
+                a.1.fetched_at
+                    .partial_cmp(&b.1.fetched_at)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+            .map(|(k, _)| k.clone());
+        if let Some(key) = oldest {
+            cache.remove(&key);
+            removed += 1;
+        }
+    }
+    removed
+}
+
+pub async fn get_cached_meta(state: &AppState, key: &str) -> Option<serde_json::Value> {
+    let ttl_secs = *META_CACHE_TTL_HOURS * 3600.0;
+    let cache = state.metadata_cache.lock().await;
+    let meta = cache.get(key)?;
+    if now_secs() - meta.fetched_at < ttl_secs {
+        Some(meta.json.clone())
+    } else {
+        None
+    }
+}
+
+pub async fn store_cached_meta(state: &AppState, key: String, json: serde_json::Value) {
+    let mut cache = state.metadata_cache.lock().await;
+    evict_metadata_cache(&mut cache);
+    cache.insert(
+        key,
+        CachedMeta {
+            json,
+            fetched_at: now_secs(),
+        },
+    );
 }
 
 #[derive(Clone, Debug)]
@@ -167,6 +239,19 @@ pub async fn cleanup_old_data(state: &AppState) {
         }
         attempts.retain(|_, timestamps| !timestamps.is_empty());
     }
+
+    // Cleanup expired metadata cache entries
+    {
+        let mut cache = state.metadata_cache.lock().await;
+        let before = cache.len();
+        evict_metadata_cache(&mut cache);
+        if before != cache.len() {
+            info!(
+                "Cleaned up {} expired metadata cache entries",
+                before - cache.len()
+            );
+        }
+    }
 }
 
 // ============================================================================
@@ -195,6 +280,7 @@ mod tests {
             auth_tokens: Mutex::new(HashMap::new()),
             active_children: Mutex::new(HashMap::new()),
             login_attempts: Mutex::new(HashMap::new()),
+            metadata_cache: Mutex::new(HashMap::new()),
         });
 
         // Test inserting a download
@@ -232,6 +318,7 @@ mod tests {
             auth_tokens: Mutex::new(HashMap::new()),
             active_children: Mutex::new(HashMap::new()),
             login_attempts: Mutex::new(HashMap::new()),
+            metadata_cache: Mutex::new(HashMap::new()),
         });
 
         // Insert
@@ -287,6 +374,7 @@ mod auth_cleanup_tests {
             auth_tokens: Mutex::new(HashMap::new()),
             active_children: Mutex::new(HashMap::new()),
             login_attempts: Mutex::new(HashMap::new()),
+            metadata_cache: Mutex::new(HashMap::new()),
         })
     }
 
@@ -373,5 +461,130 @@ mod auth_cleanup_tests {
         assert_eq!(TOKEN_MAX_AGE_SECS, 30.0 * 24.0 * 3600.0);
         assert_eq!(LOGIN_WINDOW_SECS, 900.0);
         assert_eq!(MAX_LOGIN_ATTEMPTS, 5);
+    }
+}
+
+#[cfg(test)]
+mod metadata_cache_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn fresh_state() -> SharedState {
+        Arc::new(AppState {
+            active_downloads: Mutex::new(HashMap::new()),
+            auth_tokens: Mutex::new(HashMap::new()),
+            active_children: Mutex::new(HashMap::new()),
+            login_attempts: Mutex::new(HashMap::new()),
+            metadata_cache: Mutex::new(HashMap::new()),
+        })
+    }
+
+    #[tokio::test]
+    async fn test_store_and_get_roundtrip() {
+        let state = fresh_state();
+        let payload = json!({ "id": "abc", "title": "Test" });
+
+        store_cached_meta(&state, "https://www.youtube.com/watch?v=abc".into(), payload.clone()).await;
+
+        let got = get_cached_meta(&state, "https://www.youtube.com/watch?v=abc").await;
+        assert_eq!(got, Some(payload));
+    }
+
+    #[tokio::test]
+    async fn test_expired_entry_not_returned() {
+        let state = fresh_state();
+
+        {
+            let mut cache = state.metadata_cache.lock().await;
+            cache.insert(
+                "stale".to_string(),
+                CachedMeta {
+                    json: json!({ "id": "stale" }),
+                    fetched_at: now_secs() - *META_CACHE_TTL_HOURS * 3600.0 - 1.0,
+                },
+            );
+            cache.insert(
+                "fresh".to_string(),
+                CachedMeta {
+                    json: json!({ "id": "fresh" }),
+                    fetched_at: now_secs(),
+                },
+            );
+        }
+
+        assert!(get_cached_meta(&state, "stale").await.is_none());
+        assert!(get_cached_meta(&state, "fresh").await.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_cleanup_purges_expired_entries() {
+        let state = fresh_state();
+        {
+            let mut cache = state.metadata_cache.lock().await;
+            cache.insert(
+                "old".to_string(),
+                CachedMeta {
+                    json: json!({}),
+                    fetched_at: now_secs() - *META_CACHE_TTL_HOURS * 3600.0 - 10.0,
+                },
+            );
+            cache.insert(
+                "new".to_string(),
+                CachedMeta { json: json!({}), fetched_at: now_secs() },
+            );
+        }
+
+        cleanup_old_data(&state).await;
+
+        let cache = state.metadata_cache.lock().await;
+        assert_eq!(cache.len(), 1);
+        assert!(cache.contains_key("new"));
+    }
+
+    #[tokio::test]
+    async fn test_store_caps_cache_at_limit() {
+        let state = fresh_state();
+        let total = META_CACHE_MAX_ENTRIES + 20;
+        for i in 0..total {
+            store_cached_meta(&state, format!("key-{}", i), json!({})).await;
+        }
+
+        let cache = state.metadata_cache.lock().await;
+        assert_eq!(
+            cache.len(),
+            META_CACHE_MAX_ENTRIES,
+            "cache must never grow beyond the entry limit"
+        );
+        assert!(!cache.contains_key("key-0"), "oldest entry must be evicted");
+        assert!(
+            cache.contains_key(&format!("key-{}", total - 1)),
+            "newest entry must survive"
+        );
+    }
+
+    #[test]
+    fn test_eviction_removes_expired_first_then_oldest() {
+        let now = now_secs();
+        let ttl_secs = *META_CACHE_TTL_HOURS * 3600.0;
+        let mut cache = HashMap::new();
+        for i in 0..META_CACHE_MAX_ENTRIES {
+            cache.insert(
+                format!("expired-{}", i),
+                CachedMeta { json: json!({}), fetched_at: now - ttl_secs - 1.0 - i as f64 },
+            );
+        }
+
+        evict_metadata_cache(&mut cache);
+        assert!(cache.is_empty(), "all expired entries should be purged");
+
+        for i in 0..META_CACHE_MAX_ENTRIES {
+            cache.insert(format!("k{}", i), CachedMeta { json: json!({}), fetched_at: now });
+        }
+        cache.insert("newcomer".to_string(), CachedMeta { json: json!({}), fetched_at: now + 1.0 });
+
+        evict_metadata_cache(&mut cache);
+
+        assert_eq!(cache.len(), META_CACHE_MAX_ENTRIES);
+        assert!(cache.contains_key("newcomer"), "fresh entry must not be evicted");
     }
 }

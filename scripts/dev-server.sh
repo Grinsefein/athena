@@ -13,6 +13,7 @@ export PORT=${PORT:-8000}
 export RUST_LOG=${RUST_LOG:-info}
 
 echo "Server will start on http://localhost:$PORT"
+echo "Frontend hot-reload (optional): cd frontend && npm run dev  (proxies /api to localhost:$PORT)"
 
 # Check if --watch is passed
 if [ "$1" == "--watch" ]; then

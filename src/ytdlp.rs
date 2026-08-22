@@ -9,7 +9,7 @@ use tokio::{
 };
 use tracing::{error, info, warn};
 
-use crate::state::{SharedState, DOWNLOAD_DIR, DOWNLOAD_SEMAPHORE};
+use crate::state::{get_cached_meta, SharedState, DOWNLOAD_DIR, DOWNLOAD_SEMAPHORE};
 
 // Pre-compiled regex for progress parsing (captures percentage, speed, and ETA)
 pub static PROGRESS_REGEX: Lazy<Regex> = Lazy::new(|| {
@@ -186,29 +186,34 @@ pub async fn execute_download(
     format_type: &str,
     quality: &str,
 ) -> Result<(), String> {
-    let info_output = Command::new("yt-dlp")
-        .args([
-            "--quiet",
-            "--no-warnings",
-            "--dump-json",
-            "--no-download",
-            url,
-        ])
-        .kill_on_drop(true)
-        .output();
+    let video_info: serde_json::Value = if let Some(info) = get_cached_meta(state, url).await {
+        info!("Download {} using cached metadata for {}", download_id, url);
+        info
+    } else {
+        let info_output = Command::new("yt-dlp")
+            .args([
+                "--quiet",
+                "--no-warnings",
+                "--dump-json",
+                "--no-download",
+                url,
+            ])
+            .kill_on_drop(true)
+            .output();
 
-    let info_output = match tokio::time::timeout(Duration::from_secs(90), info_output).await {
-        Ok(Ok(out)) => out,
-        Ok(Err(e)) => return Err(format!("Failed to get video info: {}", e)),
-        Err(_) => return Err("Zeitüberschreitung beim Abrufen der Video-Informationen".to_string()),
+        let info_output = match tokio::time::timeout(Duration::from_secs(90), info_output).await {
+            Ok(Ok(out)) => out,
+            Ok(Err(e)) => return Err(format!("Failed to get video info: {}", e)),
+            Err(_) => return Err("Zeitüberschreitung beim Abrufen der Video-Informationen".to_string()),
+        };
+
+        if !info_output.status.success() {
+            return Err("Failed to analyze video".to_string());
+        }
+
+        serde_json::from_slice(&info_output.stdout)
+            .map_err(|e| format!("Failed to parse video info: {}", e))?
     };
-
-    if !info_output.status.success() {
-        return Err("Failed to analyze video".to_string());
-    }
-
-    let video_info: serde_json::Value = serde_json::from_slice(&info_output.stdout)
-        .map_err(|e| format!("Failed to parse video info: {}", e))?;
 
     let filesize = video_info
         .get("filesize")

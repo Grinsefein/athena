@@ -107,6 +107,7 @@ async fn main() {
         auth_tokens: tokio::sync::Mutex::new(HashMap::new()),
         active_children: tokio::sync::Mutex::new(HashMap::new()),
         login_attempts: tokio::sync::Mutex::new(HashMap::new()),
+        metadata_cache: tokio::sync::Mutex::new(HashMap::new()),
     });
 
     if PASSWORD_HASH.is_some() {

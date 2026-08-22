@@ -71,9 +71,12 @@ button, input, [role="button"] {
     touch-action: manipulation;
     -webkit-tap-highlight-color: transparent;
 }
-button:focus-visible, input:focus-visible, a:focus-visible {
+button:focus-visible, a:focus-visible {
     outline: 2px solid var(--brand-500);
     outline-offset: 2px;
+}
+input:focus-visible, select:focus-visible {
+    outline: none;
 }
 
 .shell {

@@ -18,6 +18,11 @@ if [ -f scripts/install-linux.sh ]; then
 fi
 
 # Build frontend
+if ! command -v npm >/dev/null 2>&1; then
+    echo "ERROR: npm not found. Node.js >= 18 and npm are required to build the frontend." >&2
+    echo "       Install Node.js first (e.g. via nvm or NodeSource), then re-run this script." >&2
+    exit 1
+fi
 echo "Building Svelte frontend..."
 (cd frontend && npm install && npm run build)
 

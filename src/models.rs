@@ -37,6 +37,7 @@ pub struct PlaylistVideo {
 #[derive(Serialize)]
 pub struct AnalyzeResponse {
     pub id: String,
+    pub url: String,
     pub title: String,
     pub description: String,
     pub thumbnail: String,

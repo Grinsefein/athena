@@ -1,7 +1,7 @@
 # Athena Pi - Makefile for Host-Only (Native) Setup and Development
 # This Makefile manages dependencies, compilation, running, and systemd service installation.
 
-.PHONY: help build release run dev test clean watch lint fmt install-deps setup-service update-service remove-service quick-setup dev-server check
+.PHONY: help build release run dev test clean watch lint fmt install-deps setup-service update-service remove-service quick-setup dev-server dev-frontend build-frontend check
 
 help:
 	@echo ""
@@ -12,10 +12,12 @@ help:
 	@echo "  make quick-setup      Complete development setup (dependencies + build)"
 	@echo "  make dev              Build and run with dev options"
 	@echo "  make dev-server       Start dev server with live reload (--watch)"
+	@echo "  make dev-frontend     Start Vite dev server with HMR (needs backend on :8000)"
 	@echo ""
 	@echo "$(GREEN)🔨 Building:$(NC)"
-	@echo "  make build            Build debug binary"
-	@echo "  make release          Build optimized release binary"
+	@echo "  make build            Build debug binary (incl. frontend)"
+	@echo "  make release          Build optimized release binary (incl. frontend)"
+	@echo "  make build-frontend   Build only the Svelte frontend bundle"
 	@echo "  make run              Run debug binary"
 	@echo "  make watch            Watch and rebuild on changes"
 	@echo ""
@@ -66,6 +68,10 @@ quick-setup:
 dev-server:
 	@chmod +x scripts/dev-server.sh
 	@./scripts/dev-server.sh --watch
+
+dev-frontend:
+	@echo "Starting Vite dev server with HMR (proxies /api to localhost:8000)..."
+	@cd frontend && npm install && npm run dev
 
 dev: quick-setup build run
 

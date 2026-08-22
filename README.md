@@ -1,6 +1,6 @@
 # Athena Pi
 
-A unified Rust-based video downloader with embedded Alpine.js frontend. Downloads are stored temporarily and auto-deleted.
+A unified Rust-based video downloader with embedded Svelte frontend. Downloads are stored temporarily and auto-deleted.
 
 ## Features
 
@@ -9,12 +9,14 @@ A unified Rust-based video downloader with embedded Alpine.js frontend. Download
 - YouTube video/audio downloading via yt-dlp
 - Real-time progress tracking with Server-Sent Events (SSE)
 - Concurrent download limiting with semaphore
+- **Metadata Cache**: TTL-based in-memory cache for yt-dlp metadata, reused across analyze and download flows to reduce upstream requests
 - Memory-efficient streaming downloads
 - Dark mode UI
 
 ## Requirements
 
 - Rust 1.70+
+- Node.js 18+ and npm (for building the frontend)
 - yt-dlp installed on system
 - ffmpeg (for audio extraction)
 
@@ -108,6 +110,8 @@ Environment variables can be configured in `/etc/athena/athena.env` (for systemd
 - `PORT` - Server port (default: 8000)
 - `DOWNLOAD_DIR` - Override temp directory (default: `/tmp/athena-downloads`)
 - `MAX_CONCURRENT_DOWNLOADS` - Max parallel downloads (default: 2)
+- `MAX_CONCURRENT_ANALYZE` - Max parallel analyze calls, each spawns yt-dlp (default: 2)
+- `META_CACHE_TTL_HOURS` - TTL for cached yt-dlp metadata in hours; 0 disables the cache (default: 6)
 - `MAX_FILE_AGE_HOURS` - Max age of temp files in hours before deletion (default: 1.0)
 - `CLEANUP_INTERVAL_SECONDS` - Cleanup check interval in seconds (default: 600)
 - `RUST_LOG` - Logging level (default: info)

@@ -26,7 +26,8 @@ use crate::models::{
     LoginRequest, LoginResponse, PlaylistVideo, ProgressUpdate, ShareRequest,
 };
 use crate::state::{
-    now_secs, AppState, DownloadInfo, SharedState, PASSWORD_HASH, TOKEN_MAX_AGE_SECS,
+    get_cached_meta, now_secs, store_cached_meta, ANALYZE_SEMAPHORE, AppState, DownloadInfo,
+    SharedState, PASSWORD_HASH, TOKEN_MAX_AGE_SECS,
 };
 use crate::ytdlp::{
     download_task, get_audio_multiplier, map_audio_format_name, playlist_download_task,
@@ -81,6 +82,78 @@ fn validate_url(url: &str) -> AppResult<()> {
         Err(AppError::InvalidUrl {
             message: "Nur vollständige http(s)-URLs werden unterstützt".to_string(),
         })
+    }
+}
+
+/// Reduce a URL to a stable, tracking-free canonical form so that the same
+/// video/playlist always maps to the same metadata-cache key.
+///
+/// - youtu.be/<id>            -> https://www.youtube.com/watch?v=<id>
+/// - youtube.com/watch?v=<id> -> query reduced to just v= (list=, si=, is=, ... dropped)
+/// - youtube.com/playlist?list=<id> -> query reduced to just list=
+/// - any other host or shape is returned unchanged
+pub fn canonicalize_url(raw: &str) -> String {
+    let trimmed = raw.trim();
+    let rest = match trimmed
+        .strip_prefix("https://")
+        .or_else(|| trimmed.strip_prefix("http://"))
+    {
+        Some(r) => r,
+        None => return trimmed.to_string(),
+    };
+
+    let (before_query, query) = match rest.find('?') {
+        Some(i) => (&rest[..i], &rest[i + 1..]),
+        None => (rest, ""),
+    };
+    let (host_raw, path) = match before_query.find('/') {
+        Some(i) => (&before_query[..i], &before_query[i..]),
+        None => (before_query, ""),
+    };
+    let host = host_raw.to_ascii_lowercase();
+
+    let get_param = |name: &str| -> Option<&str> {
+        query.split('&').find_map(|pair| {
+            let (k, v) = pair.split_once('=')?;
+            (k == name && !v.is_empty()).then_some(v)
+        })
+    };
+
+    let is_youtube = host == "youtu.be"
+        || host == "youtube.com"
+        || host == "m.youtube.com"
+        || host == "music.youtube.com"
+        || host.ends_with(".youtube.com");
+    if !is_youtube {
+        return trimmed.to_string();
+    }
+
+    if host == "youtu.be" {
+        let id = path.trim_start_matches('/').split('/').next().unwrap_or("");
+        if id.is_empty() {
+            return trimmed.to_string();
+        }
+        return format!("https://www.youtube.com/watch?v={}", id);
+    }
+
+    match path {
+        "/watch" => match get_param("v") {
+            Some(id) => format!("https://www.youtube.com/watch?v={}", id),
+            None => trimmed.to_string(),
+        },
+        "/playlist" => match get_param("list") {
+            Some(l) => format!("https://www.youtube.com/playlist?list={}", l),
+            None => trimmed.to_string(),
+        },
+        p if p.starts_with("/shorts/") => {
+            let id = p.trim_start_matches("/shorts/").split('/').next().unwrap_or("");
+            if id.is_empty() {
+                trimmed.to_string()
+            } else {
+                format!("https://www.youtube.com/watch?v={}", id)
+            }
+        }
+        _ => trimmed.to_string(),
     }
 }
 
@@ -456,6 +529,49 @@ fn build_format_presets(info: &serde_json::Value) -> Vec<FormatInfo> {
     all_formats
 }
 
+fn build_analyze_response(info: &serde_json::Value, canonical_url: &str) -> AnalyzeResponse {
+    let duration_secs = info.get("duration").and_then(|d| d.as_f64()).unwrap_or(0.0) as u64;
+    let duration_mins = duration_secs / 60;
+    let duration_rem = duration_secs % 60;
+    let duration = format!("{}:{:02}", duration_mins, duration_rem);
+
+    let description = info
+        .get("description")
+        .and_then(|d| d.as_str())
+        .unwrap_or("")
+        .chars()
+        .take(200)
+        .collect::<String>();
+
+    AnalyzeResponse {
+        id: info
+            .get("id")
+            .and_then(|i| i.as_str())
+            .unwrap_or("unknown")
+            .to_string(),
+        url: canonical_url.to_string(),
+        title: info
+            .get("title")
+            .and_then(|t| t.as_str())
+            .unwrap_or("Unknown")
+            .to_string(),
+        description,
+        thumbnail: info
+            .get("thumbnail")
+            .and_then(|t| t.as_str())
+            .unwrap_or("")
+            .to_string(),
+        duration,
+        author: info
+            .get("uploader")
+            .and_then(|u| u.as_str())
+            .unwrap_or("Unknown")
+            .to_string(),
+        formats: build_format_presets(info),
+        playlist_videos: None,
+    }
+}
+
 pub async fn analyze_video(
     State(state): State<SharedState>,
     headers: axum::http::HeaderMap,
@@ -468,7 +584,23 @@ pub async fn analyze_video(
     }
 
     validate_url(&request.url)?;
+    let canonical_url = canonicalize_url(&request.url);
     info!("Analyzing video/playlist: {}", request.url);
+
+    if let Some(info) = get_cached_meta(&state, &canonical_url).await {
+        info!("Metadata cache hit for {}", canonical_url);
+        return Ok(Json(ApiResponse {
+            success: true,
+            data: Some(build_analyze_response(&info, &canonical_url)),
+            error: None,
+        }));
+    }
+
+    let _permit = ANALYZE_SEMAPHORE.acquire().await.map_err(|_| {
+        AppError::Internal {
+            message: "Analyze-Semaphore wurde geschlossen".to_string(),
+        }
+    })?;
 
     let flat_output = tokio::time::timeout(
         Duration::from_secs(45),
@@ -478,7 +610,7 @@ pub async fn analyze_video(
                 "--no-warnings",
                 "--flat-playlist",
                 "--dump-single-json",
-                &request.url,
+                &canonical_url,
             ])
             .kill_on_drop(true)
             .output(),
@@ -541,6 +673,7 @@ pub async fn analyze_video(
     if is_playlist {
         let response = AnalyzeResponse {
             id: playlist_id,
+            url: canonical_url.clone(),
             title: playlist_title,
             description: format!(
                 "Playlist mit {} Videos",
@@ -582,7 +715,7 @@ pub async fn analyze_video(
                 "--no-warnings",
                 "--dump-json",
                 "--no-download",
-                &request.url,
+                &canonical_url,
             ])
             .kill_on_drop(true)
             .output(),
@@ -612,47 +745,8 @@ pub async fn analyze_video(
     let json_str = String::from_utf8_lossy(&output.stdout);
     let info: serde_json::Value = serde_json::from_str(&json_str)?;
 
-    let duration_secs = info.get("duration").and_then(|d| d.as_f64()).unwrap_or(0.0) as u64;
-    let duration_mins = duration_secs / 60;
-    let duration_rem = duration_secs % 60;
-    let duration = format!("{}:{:02}", duration_mins, duration_rem);
-
-    let all_formats = build_format_presets(&info);
-
-    let description = info
-        .get("description")
-        .and_then(|d| d.as_str())
-        .unwrap_or("")
-        .chars()
-        .take(200)
-        .collect::<String>();
-
-    let response = AnalyzeResponse {
-        id: info
-            .get("id")
-            .and_then(|i| i.as_str())
-            .unwrap_or("unknown")
-            .to_string(),
-        title: info
-            .get("title")
-            .and_then(|t| t.as_str())
-            .unwrap_or("Unknown")
-            .to_string(),
-        description,
-        thumbnail: info
-            .get("thumbnail")
-            .and_then(|t| t.as_str())
-            .unwrap_or("")
-            .to_string(),
-        duration,
-        author: info
-            .get("uploader")
-            .and_then(|u| u.as_str())
-            .unwrap_or("Unknown")
-            .to_string(),
-        formats: all_formats,
-        playlist_videos: None,
-    };
+    let response = build_analyze_response(&info, &canonical_url);
+    store_cached_meta(&state, canonical_url, info).await;
 
     Ok(Json(ApiResponse {
         success: true,
@@ -743,6 +837,7 @@ pub async fn start_download(
     }
 
     validate_url(&request.url)?;
+    let canonical_url = canonicalize_url(&request.url);
     if let Some(urls) = &request.playlist_urls {
         for url in urls {
             validate_url(url)?;
@@ -750,7 +845,7 @@ pub async fn start_download(
     }
 
     let download_id = Uuid::new_v4().to_string()[..8].to_string();
-    info!("Starting download {} for URL: {}", download_id, request.url);
+    info!("Starting download {} for URL: {}", download_id, canonical_url);
 
     {
         let mut downloads = state.active_downloads.lock().await;
@@ -771,6 +866,7 @@ pub async fn start_download(
 
     let state_clone = state.clone();
     let download_id_clone = download_id.clone();
+    let canonical_for_task = canonical_url;
     tokio::spawn(async move {
         if let Some(urls) = request.playlist_urls {
             if !urls.is_empty() {
@@ -789,7 +885,7 @@ pub async fn start_download(
         download_task(
             state_clone,
             download_id_clone,
-            request.url,
+            canonical_for_task,
             request.format,
             request.quality,
         )
@@ -1247,6 +1343,119 @@ mod tests {
             let parsed: Result<axum::http::HeaderValue, _> = v.parse();
             assert!(parsed.is_ok(), "invalid cache header value: {}", v);
         }
+    }
+}
+
+// ============================================================================
+// canonicalize_url tests
+// ============================================================================
+#[cfg(test)]
+mod canonicalize_url_tests {
+    use super::*;
+
+    #[test]
+    fn test_youtu_be_with_tracking_param() {
+        assert_eq!(
+            canonicalize_url("https://youtu.be/T_GhB7lK2YE?is=IVSwoUOiEa_mhpa0"),
+            "https://www.youtube.com/watch?v=T_GhB7lK2YE"
+        );
+    }
+
+    #[test]
+    fn test_watch_url_strips_all_extra_params() {
+        assert_eq!(
+            canonicalize_url(
+                "https://www.youtube.com/watch?v=jv3nntYylpc&is=LvPdyOZeeFY5Ue5w&t=42s&si=x"
+            ),
+            "https://www.youtube.com/watch?v=jv3nntYylpc"
+        );
+    }
+
+    #[test]
+    fn test_playlist_strips_tracking() {
+        assert_eq!(
+            canonicalize_url(
+                "https://youtube.com/playlist?list=OLAK5uy_m9ZGs69s2Xh3UKl4ymQeRGTDT51_s1Aoc&si=5Z6WtwnIFu3E4bFZ"
+            ),
+            "https://www.youtube.com/playlist?list=OLAK5uy_m9ZGs69s2Xh3UKl4ymQeRGTDT51_s1Aoc"
+        );
+    }
+
+    #[test]
+    fn test_mobile_and_music_hosts_map_to_watch() {
+        assert_eq!(
+            canonicalize_url("https://m.youtube.com/watch?v=abc123XYZ_-"),
+            "https://www.youtube.com/watch?v=abc123XYZ_-"
+        );
+        assert_eq!(
+            canonicalize_url("https://music.youtube.com/watch?v=abc123XYZ_-&list=PLxyz"),
+            "https://www.youtube.com/watch?v=abc123XYZ_-"
+        );
+    }
+
+    #[test]
+    fn test_shorts_url_maps_to_watch() {
+        assert_eq!(
+            canonicalize_url("https://www.youtube.com/shorts/dQw4w9WgXcQ?feature=share"),
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+        );
+    }
+
+    #[test]
+    fn test_no_query_string_variants() {
+        assert_eq!(
+            canonicalize_url("https://youtu.be/dQw4w9WgXcQ"),
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+        );
+        assert_eq!(
+            canonicalize_url("https://www.youtube.com/watch?v=dQw4w9WgXcQ"),
+            "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+        );
+    }
+
+    #[test]
+    fn test_same_video_different_inputs_share_key() {
+        let a = canonicalize_url("https://youtu.be/abc123XYZ_-?si=t1");
+        let b = canonicalize_url("https://m.youtube.com/watch?t=5&v=abc123XYZ_-");
+        let c = canonicalize_url("http://www.youtube.com/watch?v=abc123XYZ_-&pp=ygE");
+        assert_eq!(a, b);
+        assert_eq!(b, c);
+    }
+
+    #[test]
+    fn test_non_youtube_urls_pass_through() {
+        assert_eq!(canonicalize_url("https://vimeo.com/12345"), "https://vimeo.com/12345");
+        assert_eq!(canonicalize_url("https://youtu.be.fake/x?y=z"), "https://youtu.be.fake/x?y=z");
+    }
+
+    #[test]
+    fn test_malformed_input_returns_trimmed_original() {
+        assert_eq!(canonicalize_url("  not a url  "), "not a url");
+        assert_eq!(canonicalize_url(""), "");
+    }
+
+    #[test]
+    fn test_empty_or_missing_ids_return_original() {
+        assert_eq!(
+            canonicalize_url("https://www.youtube.com/watch?list=only_list"),
+            "https://www.youtube.com/watch?list=only_list"
+        );
+        assert_eq!(
+            canonicalize_url("https://www.youtube.com/playlist?si=no_list"),
+            "https://www.youtube.com/playlist?si=no_list"
+        );
+        assert_eq!(
+            canonicalize_url("https://youtu.be/"),
+            "https://youtu.be/"
+        );
+    }
+
+    #[test]
+    fn test_whitespace_is_trimmed() {
+        assert_eq!(
+            canonicalize_url("  https://youtu.be/abc123XYZ_- \n"),
+            "https://www.youtube.com/watch?v=abc123XYZ_-"
+        );
     }
 }
 

@@ -8,8 +8,8 @@
   import PlaylistSelector from './lib/PlaylistSelector.svelte';
   import DownloadProgress from './lib/DownloadProgress.svelte';
 
-  import { theme, urlInput, loading, videoInfo, errorMsg, cleanUrl, isValidUrl } from './stores.js';
-  import { checkConfig, analyzeVideo } from './api.js';
+  import { theme, urlInput, loading, videoInfo, errorMsg, isValidUrl } from './stores.js';
+  import { checkConfig, analyzeVideo, maybeAutoAnalyze } from './api.js';
 
   let debounceTimeout;
   let isInputFocused = false;
@@ -36,23 +36,17 @@
 
   function handlePaste(event) {
     const pastedText = (event.clipboardData || window.clipboardData).getData('text');
-    if (pastedText) {
-      const trimmed = pastedText.trim();
-      urlInput.set(trimmed);
-      if (isValidUrl(trimmed)) {
-        setTimeout(() => analyzeVideo(trimmed), 10);
-      }
+    if (pastedText && isValidUrl(pastedText.trim())) {
+      urlInput.set(pastedText.trim());
     }
   }
 
   $: {
     if ($urlInput && isValidUrl($urlInput)) {
       clearTimeout(debounceTimeout);
-      debounceTimeout = setTimeout(() => {
-        if (!$loading && (!$videoInfo || $videoInfo.url !== cleanUrl($urlInput))) {
-          analyzeVideo($urlInput);
-        }
-      }, 800);
+      debounceTimeout = setTimeout(() => maybeAutoAnalyze($urlInput), 800);
+    } else {
+      clearTimeout(debounceTimeout);
     }
   }
 </script>

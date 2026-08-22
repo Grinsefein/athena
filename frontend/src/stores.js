@@ -112,6 +112,7 @@ export const speed = writable(null);
 export const eta = writable(null);
 export const errorMsg = writable(null);
 export const videoInfo = writable(null);
+export const lastAnalyzedUrl = writable(null);
 export const selectedFormat = writable('video');
 export const formatSlide = writable('right');
 export const selectedQuality = writable('best');
@@ -158,6 +159,8 @@ export function formatDuration(val) {
 
 // SSE Connection manager
 let eventSource = null;
+let sseRetries = 0;
+const MAX_SSE_RETRIES = 3;
 
 export function closeSSE() {
   if (eventSource) {
@@ -168,11 +171,13 @@ export function closeSSE() {
 
 export function connectSSE(id, authToken) {
   closeSSE();
+  sseRetries = 0;
   const tokenParam = authToken ? `?token=${encodeURIComponent(authToken)}` : '';
   const es = new EventSource(`/api/progress/${id}${tokenParam}`);
   eventSource = es;
 
   es.onmessage = (event) => {
+    sseRetries = 0;
     let data;
     try { data = JSON.parse(event.data); } catch (_) { return; }
 
@@ -202,8 +207,10 @@ export function connectSSE(id, authToken) {
   es.onerror = () => {
     let isCompleted = false;
     completed.subscribe(v => isCompleted = v)();
-    if (isCompleted) {
+    if (isCompleted || sseRetries >= MAX_SSE_RETRIES) {
       closeSSE();
+      return;
     }
+    sseRetries += 1;
   };
 }

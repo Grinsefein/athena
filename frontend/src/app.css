@@ -139,22 +139,26 @@ button:focus-visible, input:focus-visible, a:focus-visible {
 
 /* ---------- Mobile UI optimization ---------- */
 @media (max-width: 639px) {
-    .shell { padding-left: 0.75rem; padding-right: 0.75rem; padding-top: calc(var(--safe-top) + 3.75rem); }
-    .hero { margin-bottom: 1.25rem; }
-    .hero h1 { font-size: 1.6rem; }
-    .logo-badge { width: 48px; height: 48px; border-radius: 14px; margin-bottom: 0.5rem; }
+    .shell { padding-left: 0.5rem; padding-right: 0.5rem; padding-top: calc(var(--safe-top) + 2rem); }
+    .hero { margin-bottom: 0.875rem; transition: max-height 0.25s ease, opacity 0.2s ease, margin 0.2s ease; }
+    .hero h1 { font-size: 1.4rem; }
+    .logo-badge { width: 42px; height: 42px; border-radius: 12px; margin-bottom: 0.35rem; }
+    .tagline { margin: 0.2rem 0 0; font-size: 0.85rem; }
 
-    .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-xl); box-shadow: var(--shadow-card); }
-    .card-body { padding: 1rem; }
+    .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--r-lg); box-shadow: var(--shadow-card); }
+    .card-body { padding: 0.875rem 0.75rem; }
+
+    /* Focus mode: Hide hero header when user is typing in URL input on mobile */
+    .shell.focus-mode .hero { display: none; }
 
     /* Results mode: scale down hero nicely instead of hiding */
     .shell.results-mode .hero { margin-bottom: 0.75rem; }
-    .shell.results-mode .hero h1 { font-size: 1.35rem; }
+    .shell.results-mode .hero h1 { font-size: 1.25rem; }
     .shell.results-mode .hero .logo-badge { display: none; }
     .shell.results-mode .hero .tagline { display: none; }
-    .shell.results-mode .result { margin-top: 1rem; gap: 0.875rem; }
-    .shell.results-mode .media { gap: 0.75rem; padding: 0.65rem; }
-    .shell.results-mode .thumb { width: 92px; }
+    .shell.results-mode .result { margin-top: 0.875rem; gap: 0.75rem; }
+    .shell.results-mode .media { gap: 0.65rem; padding: 0.6rem; }
+    .shell.results-mode .thumb { width: 84px; }
 
     .dl-wrap {
         position: relative;
@@ -165,6 +169,21 @@ button:focus-visible, input:focus-visible, a:focus-visible {
         -webkit-backdrop-filter: none;
         border-top: none;
     }
+
+    /* Compact elements & buttons for mobile */
+    .url-input { padding: 0.75rem 0.4rem 0.75rem 0.85rem; font-size: 0.9rem; }
+    .go-btn { min-width: 42px; min-height: 42px; padding: 0.45rem 0.75rem; border-radius: 9px; }
+    .go-btn svg { width: 18px; height: 18px; }
+
+    .segmented button { min-height: 38px; font-size: 0.8125rem; border-radius: 8px; }
+    .quality-select { min-height: 44px; padding: 0.65rem 2.4rem 0.65rem 0.85rem; font-size: 0.875rem; border-radius: 12px; }
+    .select-chevron { right: 0.75rem; width: 16px; height: 16px; }
+
+    .dl-btn { min-height: 48px; padding: 0.6rem 0.875rem; font-size: 0.9375rem; border-radius: 12px; }
+    .dl-main svg { width: 18px; height: 18px; }
+
+    .btn-save, .btn-ghost { min-height: 46px; padding: 0 0.875rem; font-size: 0.875rem; border-radius: 12px; }
+    .btn-save svg, .btn-ghost svg { width: 16px; height: 16px; }
 }
 
 /* Footer hidden while results are shown (all viewports) */

@@ -12,6 +12,7 @@
   import { checkConfig, analyzeVideo } from './api.js';
 
   let debounceTimeout;
+  let isInputFocused = false;
 
   onMount(async () => {
     theme.init();
@@ -60,7 +61,7 @@
 <Toasts />
 <LoginModal />
 
-<main class="shell" class:results-mode={!!$videoInfo}>
+<main class="shell" class:results-mode={!!$videoInfo} class:focus-mode={isInputFocused}>
   <div class="wrap">
     <!-- Header -->
     <header class="hero">
@@ -82,6 +83,8 @@
             bind:value={$urlInput}
             on:keydown={handleInputKeydown}
             on:paste={handlePaste}
+            on:focus={() => (isInputFocused = true)}
+            on:blur={() => (isInputFocused = false)}
             placeholder="Video-Link hier einfügen..."
             aria-label="Video-URL"
             inputmode="url"

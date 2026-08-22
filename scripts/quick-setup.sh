@@ -17,6 +17,10 @@ if [ -f scripts/install-linux.sh ]; then
     bash scripts/install-linux.sh
 fi
 
+# Build frontend
+echo "Building Svelte frontend..."
+(cd frontend && npm install && npm run build)
+
 # Build project
 echo "Building Athena Pi in debug mode..."
 cargo build

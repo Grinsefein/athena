@@ -52,8 +52,9 @@ async fn register_token(state: &SharedState, token: &str) {
 async fn root_serves_embedded_frontend() {
     let html = handlers::root().await.0;
 
-    assert!(html.contains("athenaApp"), "Alpine app must be embedded");
-    assert!(html.contains("results-mode"), "mobile results mode binding");
+    assert!(html.contains("<title>Athena Pi</title>"), "title tag present");
+    assert!(html.contains("id=\"app\""), "Svelte app mount container");
+    assert!(html.contains("results-mode"), "mobile results mode styling");
     assert!(html.contains("qualitySelect"), "quality select control");
     assert!(html.contains("dl-wrap"), "sticky download wrapper");
 }

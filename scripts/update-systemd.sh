@@ -12,7 +12,8 @@ if [ "$(id -u)" = "0" ]; then
 fi
 
 # 2. Build the release binary
-echo "Building optimized release binary..."
+echo "Building frontend and optimized release binary..."
+(cd frontend && npm install && npm run build)
 cargo build --release
 
 # 3. Update yt-dlp to the latest version

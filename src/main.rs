@@ -144,6 +144,7 @@ async fn main() {
         .route("/api/login", post(handlers::login))
         .route("/api/analyze", post(handlers::analyze_video))
         .route("/api/download", post(handlers::start_download))
+        .route("/api/abort/:download_id", post(handlers::abort_download))
         .route("/api/progress/:download_id", get(handlers::progress_stream))
         .route("/api/file/:download_id", get(handlers::download_file))
         .route("/api/ytdlp-update", post(handlers::trigger_ytdlp_update))

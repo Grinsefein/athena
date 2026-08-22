@@ -184,6 +184,7 @@ input:focus-visible, select:focus-visible {
 
     .dl-btn { min-height: 48px; padding: 0.6rem 0.875rem; font-size: 0.9375rem; border-radius: 12px; }
     .dl-main svg { width: 18px; height: 18px; }
+    .btn-abort { min-height: 42px; font-size: 0.875rem; border-radius: 12px; }
 
     .btn-save, .btn-ghost { min-height: 46px; padding: 0 0.875rem; font-size: 0.875rem; border-radius: 12px; }
     .btn-save svg, .btn-ghost svg { width: 16px; height: 16px; }
@@ -215,7 +216,33 @@ input:focus-visible, select:focus-visible {
 }
 .input-row:focus-within {
     border-color: var(--brand-500);
-    box-shadow: 0 0 0 4px rgba(109, 129, 240, 0.18);
+}
+
+/* Mobile results mode: replace the editable URL bar with a read-only label
+   so the running flow cannot be altered by accident. */
+.input-row.input-hidden { display: none; }
+.url-label {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 0.55rem;
+    min-height: 46px;
+    padding: 0.55rem 0.85rem;
+    border-radius: 11px;
+    background: var(--surface-2);
+    border: 1px dashed var(--border-strong);
+    color: var(--muted);
+    font-size: 0.875rem;
+    font-weight: 600;
+    text-align: left;
+    cursor: pointer;
+}
+.url-label svg { width: 15px; height: 15px; flex-shrink: 0; opacity: 0.7; }
+.url-label-text {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
 }
 .url-input {
     flex: 1;
@@ -254,6 +281,8 @@ input:focus-visible, select:focus-visible {
 .go-btn:disabled { opacity: 0.45; cursor: default; }
 .go-btn svg { width: 20px; height: 20px; }
 @media (min-width: 640px) { .go-btn svg { width: 22px; height: 22px; } }
+.go-btn.cancel-mode { background: var(--danger-text); box-shadow: none; }
+.go-btn.cancel-mode:hover:not(:disabled) { filter: brightness(1.1); }
 
 /* ---------- Spinner ---------- */
 .spin {
@@ -286,6 +315,22 @@ input:focus-visible, select:focus-visible {
     from { opacity: 0; transform: translateY(10px); }
     to { opacity: 1; transform: none; }
 }
+
+.analyze-status {
+    margin-top: 1rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.6rem;
+    padding: 0.8rem 1rem;
+    border-radius: var(--r-md);
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    color: var(--muted);
+    font-size: 0.875rem;
+    font-weight: 600;
+}
+.analyze-status .spin { color: var(--brand-600); }
 
 .result { margin-top: clamp(1.5rem, 4vw, 2.5rem); display: flex; flex-direction: column; gap: clamp(1.25rem, 3vw, 2rem); }
 
@@ -522,6 +567,52 @@ html.dark .link-btn { color: var(--brand-400); }
     transform-origin: left center;
     transition: width 0.3s ease-out;
 }
+.dl-progress-indeterminate {
+    width: 35% !important;
+    animation: slide-indeterminate 1.1s ease-in-out infinite alternate;
+}
+@keyframes slide-indeterminate {
+    from { margin-left: 0; }
+    to { margin-left: 65%; }
+}
+
+/* Soft shimmer sweep while a download is running (clipped by .dl-btn) */
+.dl-btn[aria-busy="true"]::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(115deg, transparent 30%, rgba(255, 255, 255, 0.13) 50%, transparent 70%);
+    transform: translateX(-100%);
+    animation: shimmer 2.4s ease-in-out infinite;
+    pointer-events: none;
+}
+@keyframes shimmer {
+    to { transform: translateX(100%); }
+}
+
+/* ---------- Download abort ---------- */
+.btn-abort {
+    width: 100%;
+    margin-top: 0.6rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    min-height: 46px;
+    padding: 0 1rem;
+    border: 1px solid var(--danger-border);
+    border-radius: var(--r-lg);
+    background: var(--danger-bg);
+    color: var(--danger-text);
+    font-size: 0.9375rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition: filter 0.15s ease, transform 0.1s ease;
+}
+.btn-abort:hover:not(:disabled) { filter: brightness(0.97); }
+.btn-abort:active:not(:disabled) { transform: scale(0.98); }
+.btn-abort:disabled { opacity: 0.6; cursor: wait; }
+.btn-abort svg { width: 16px; height: 16px; flex-shrink: 0; }
 .dl-content { position: relative; z-index: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0.2rem; }
 .dl-main { display: flex; align-items: center; gap: 0.6rem; }
 .dl-main svg { width: 21px; height: 21px; }

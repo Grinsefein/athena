@@ -171,8 +171,11 @@ pub async fn download_task(
         error!("Download {} failed: {}", download_id, e);
         let mut downloads = state.active_downloads.lock().await;
         if let Some(info) = downloads.get_mut(&download_id) {
-            info.status = "error".to_string();
-            info.error = Some(e);
+            // An aborted download was killed intentionally; keep its status.
+            if info.status != "aborted" {
+                info.status = "error".to_string();
+                info.error = Some(e);
+            }
         }
     }
 
@@ -460,8 +463,11 @@ pub async fn playlist_download_task(
         error!("Playlist download {} failed: {}", download_id, e);
         let mut downloads = state.active_downloads.lock().await;
         if let Some(info) = downloads.get_mut(&download_id) {
-            info.status = "error".to_string();
-            info.error = Some(e);
+            // An aborted download was killed intentionally; keep its status.
+            if info.status != "aborted" {
+                info.status = "error".to_string();
+                info.error = Some(e);
+            }
         }
     }
 
@@ -484,6 +490,19 @@ pub async fn execute_playlist_download(
     let mut downloaded_files = Vec::new();
 
     for (index, url) in urls.iter().enumerate() {
+        // Stop launching new videos once the download was aborted.
+        let aborted = {
+            let downloads = state.active_downloads.lock().await;
+            match downloads.get(download_id) {
+                Some(info) => info.status == "aborted",
+                None => true,
+            }
+        };
+        if aborted {
+            info!("Playlist download {} aborted, stopping", download_id);
+            break;
+        }
+
         {
             let mut downloads = state.active_downloads.lock().await;
             if let Some(info) = downloads.get_mut(download_id) {
@@ -668,6 +687,21 @@ pub async fn execute_playlist_download(
                     }
                 }
             }
+        }
+    }
+
+    // If the download was aborted mid-run, discard everything collected so far.
+    {
+        let downloads = state.active_downloads.lock().await;
+        let is_aborted = match downloads.get(download_id) {
+            Some(info) => info.status == "aborted",
+            None => true,
+        };
+        if is_aborted {
+            drop(downloads);
+            let _ = fs::remove_dir_all(&temp_dir).await;
+            info!("Playlist download {} aborted, discarding partial results", download_id);
+            return Ok(());
         }
     }
 

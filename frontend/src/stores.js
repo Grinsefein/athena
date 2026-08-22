@@ -1,4 +1,4 @@
-import { writable, derived } from 'svelte/store';
+import { writable, derived, get } from 'svelte/store';
 
 // Toast store
 function createToastStore() {
@@ -120,6 +120,7 @@ export const selectedPlaylistUrls = writable([]);
 export const downloadId = writable(null);
 export const downloadUrl = writable(null);
 export const checkingUpdate = writable(false);
+export const aborting = writable(false);
 
 export function cleanUrl(url) {
   try {
@@ -169,7 +170,7 @@ export function closeSSE() {
   }
 }
 
-export function connectSSE(id, authToken) {
+export function connectSSE(id, authToken, opts = {}) {
   closeSSE();
   sseRetries = 0;
   const tokenParam = authToken ? `?token=${encodeURIComponent(authToken)}` : '';
@@ -181,11 +182,38 @@ export function connectSSE(id, authToken) {
     let data;
     try { data = JSON.parse(event.data); } catch (_) { return; }
 
+    if (data.status === 'aborted') {
+      downloading.set(false);
+      queued.set(false);
+      speed.set(null);
+      eta.set(null);
+      downloadId.set(null);
+      persistSession();
+      closeSSE();
+      return;
+    }
+
     if (data.status === 'error' || data.error) {
       const err = data.error || 'Fehler beim Herunterladen';
+
+      // After a refresh the download may already be gone (served/cleaned up).
+      // Recover quietly instead of scaring the user with an error box.
+      if (err === 'Download not found') {
+        downloading.set(false);
+        queued.set(false);
+        downloadId.set(null);
+        downloadUrl.set(null);
+        toasts.add('Download nicht mehr verfügbar', 'info');
+        persistSession();
+        closeSSE();
+        return;
+      }
+
       errorMsg.set(err);
       toasts.add(err, 'error');
       downloading.set(false);
+      downloadId.set(null);
+      persistSession();
       closeSSE();
       return;
     }
@@ -200,6 +228,7 @@ export function connectSSE(id, authToken) {
       completed.set(true);
       downloadUrl.set(data.download_url);
       toasts.add('Download abgeschlossen!', 'success');
+      persistSession();
       closeSSE();
     }
   };
@@ -209,8 +238,116 @@ export function connectSSE(id, authToken) {
     completed.subscribe(v => isCompleted = v)();
     if (isCompleted || sseRetries >= MAX_SSE_RETRIES) {
       closeSSE();
+      if (!isCompleted && !opts.reattach) {
+        // Never leave the UI stuck on a dead connection.
+        errorMsg.set('Verbindung zum Server verloren.');
+        toasts.add('Verbindung zum Server verloren.', 'error');
+      }
+      downloading.set(false);
+      queued.set(false);
+      speed.set(null);
+      eta.set(null);
+      if (!isCompleted) {
+        downloadId.set(null);
+        persistSession();
+      }
       return;
     }
     sseRetries += 1;
   };
+}
+
+// ---------------------------------------------------------------------------
+// Tab-bound session state (sessionStorage): survives a page refresh within
+// the same tab so an accidental reload never loses the analysis result or
+// the live progress of a running download. The SSE stream re-attaches to the
+// server-side download task and resumes real-time updates.
+// ---------------------------------------------------------------------------
+const SESSION_KEY = 'athena_tab_state_v1';
+
+function safeSessionGet() {
+  try {
+    const raw = sessionStorage.getItem(SESSION_KEY);
+    return raw ? JSON.parse(raw) : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+export function persistSession() {
+  try {
+    const info = get(videoInfo);
+    const id = get(downloadId);
+    const done = get(completed);
+    if (!info && !id) {
+      sessionStorage.removeItem(SESSION_KEY);
+      return;
+    }
+    sessionStorage.setItem(SESSION_KEY, JSON.stringify({
+      url: get(urlInput),
+      videoInfo: info,
+      lastAnalyzedUrl: get(lastAnalyzedUrl),
+      selectedFormat: get(selectedFormat),
+      selectedQuality: get(selectedQuality),
+      selectedPlaylistUrls: get(selectedPlaylistUrls),
+      downloadId: id,
+      downloadUrl: get(downloadUrl),
+      completed: done,
+    }));
+  } catch (_) {}
+}
+
+export function clearSession() {
+  try { sessionStorage.removeItem(SESSION_KEY); } catch (_) {}
+}
+
+/// Restores analysis results and any running download into the stores.
+/// Returns true when something was restored.
+export function restoreSession() {
+  let snap;
+  try {
+    snap = safeSessionGet();
+  } catch (_) {
+    return false;
+  }
+  if (!snap) return false;
+
+  let restored = false;
+
+  if (snap.url) urlInput.set(snap.url);
+
+  if (snap.videoInfo) {
+    videoInfo.set(snap.videoInfo);
+    lastAnalyzedUrl.set(snap.lastAnalyzedUrl || null);
+    selectedFormat.set(snap.selectedFormat || 'video');
+    formatSlide.set((snap.selectedFormat || 'video') === 'audio' ? 'left' : 'right');
+    selectedQuality.set(snap.selectedQuality || 'best');
+    selectedPlaylistUrls.set(
+      Array.isArray(snap.selectedPlaylistUrls) ? snap.selectedPlaylistUrls : []
+    );
+    restored = true;
+  }
+
+  if (snap.downloadId) {
+    downloadId.set(snap.downloadId);
+    speed.set(null);
+    eta.set(null);
+
+    if (snap.completed && snap.downloadUrl) {
+      completed.set(true);
+      downloading.set(false);
+      progress.set(100);
+      downloadUrl.set(snap.downloadUrl);
+    } else {
+      // Re-bind to the still-running server-side download; the SSE stream
+      // pushes the current status/progress within ~500ms of connecting.
+      downloading.set(true);
+      queued.set(true);
+      progress.set(0);
+      connectSSE(snap.downloadId, get(auth).token, { reattach: true });
+    }
+    restored = true;
+  }
+
+  return restored;
 }

@@ -2,8 +2,8 @@ import { get } from 'svelte/store';
 import {
   auth, toasts, loading, downloading, queued, completed, progress, speed, eta,
   errorMsg, videoInfo, lastAnalyzedUrl, selectedFormat, formatSlide, selectedQuality,
-  selectedPlaylistUrls, downloadId, downloadUrl, checkingUpdate, urlInput,
-  cleanUrl, isValidUrl, connectSSE, closeSSE
+  selectedPlaylistUrls, downloadId, downloadUrl, checkingUpdate, aborting, urlInput,
+  cleanUrl, isValidUrl, connectSSE, closeSSE, persistSession, clearSession
 } from './stores.js';
 
 export async function checkConfig() {
@@ -40,7 +40,6 @@ export async function login(password) {
 }
 
 let analyzeController = null;
-let pendingAuto = false;
 
 export async function analyzeVideo(url) {
   const targetUrl = url ? cleanUrl(String(url).trim()) : '';
@@ -91,6 +90,7 @@ export async function analyzeVideo(url) {
       selectedPlaylistUrls.set([]);
     }
     toasts.add('Analyse erfolgreich!', 'success');
+    persistSession();
   } catch (e) {
     if (e.name === 'AbortError') return;
     if (analyzeController && analyzeController.signal === signal && e.message !== 'Nicht angemeldet') {
@@ -101,36 +101,16 @@ export async function analyzeVideo(url) {
   } finally {
     if (analyzeController && analyzeController.signal === signal) {
       loading.set(false);
-      runPendingAutoAnalyze();
     }
   }
 }
 
-// Auto-analyze path used by the input debounce. Skips when the exact URL was
-// already analyzed; defers (once) while another analysis is still running.
-export function maybeAutoAnalyze(input) {
-  const value = (input || '').trim();
-  if (!value || !isValidUrl(value)) return;
-  if (get(loading)) {
-    pendingAuto = true;
-    return;
-  }
-  if (get(lastAnalyzedUrl) === cleanUrl(value)) return;
-  analyzeVideo(value);
-}
-
-function runPendingAutoAnalyze() {
-  if (!pendingAuto) return;
-  pendingAuto = false;
-  maybeAutoAnalyze(get(urlInput));
-}
-
-export function resetPendingAnalysis() {
-  pendingAuto = false;
+export function cancelAnalyze() {
   if (analyzeController) {
     analyzeController.abort();
     analyzeController = null;
   }
+  loading.set(false);
 }
 
 export async function startDownload() {
@@ -178,6 +158,7 @@ export async function startDownload() {
     downloadId.set(id);
     queued.set(data.data.status === 'queued');
     connectSSE(id, authState.token);
+    persistSession();
   } catch (e) {
     downloading.set(false);
     if (e.message !== 'Nicht angemeldet') {
@@ -185,6 +166,37 @@ export async function startDownload() {
       errorMsg.set(msg);
       toasts.add(msg, 'error');
     }
+  }
+}
+
+export async function abortDownload() {
+  const id = get(downloadId);
+  if (!id || !get(downloading)) return;
+  aborting.set(true);
+
+  try {
+    const authState = get(auth);
+    const response = await fetch(`/api/abort/${encodeURIComponent(id)}`, {
+      method: 'POST',
+      headers: {
+        ...(authState.token && { 'Authorization': `Bearer ${authState.token}` })
+      }
+    });
+    if (response.status === 401) {
+      auth.setShowLogin(true);
+    }
+  } catch (_) {
+    // Network errors must not leave the UI stuck in "downloading"
+  } finally {
+    aborting.set(false);
+    closeSSE();
+    downloading.set(false);
+    queued.set(false);
+    speed.set(null);
+    eta.set(null);
+    downloadId.set(null);
+    persistSession();
+    toasts.add('Download abgebrochen', 'info');
   }
 }
 
@@ -214,7 +226,8 @@ export async function checkYtdlpUpdate() {
 }
 
 export function resetApp() {
-  resetPendingAnalysis();
+  cancelAnalyze();
+  clearSession();
   urlInput.set('');
   videoInfo.set(null);
   lastAnalyzedUrl.set(null);

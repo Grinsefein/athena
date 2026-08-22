@@ -27,7 +27,7 @@ use crate::models::{
 };
 use crate::state::{
     get_cached_meta, now_secs, store_cached_meta, ANALYZE_SEMAPHORE, AppState, DownloadInfo,
-    SharedState, PASSWORD_HASH, TOKEN_MAX_AGE_SECS,
+    SharedState, PASSWORD_HASH, TOKEN_MAX_AGE_SECS, DOWNLOAD_DIR,
 };
 use crate::ytdlp::{
     download_task, get_audio_multiplier, map_audio_format_name, playlist_download_task,
@@ -902,6 +902,103 @@ pub async fn start_download(
     }))
 }
 
+/// Remove partial download artifacts belonging to an aborted download:
+/// yt-dlp `.part`/`.ytdl` fragments and the playlist temp directory.
+async fn cleanup_partial_files(download_id: &str) {
+    let id_marker = format!("-[{}].", download_id);
+    if let Ok(mut entries) = fs::read_dir(&*DOWNLOAD_DIR).await {
+        while let Ok(Some(entry)) = entries.next_entry().await {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+            let name = match path.file_name().and_then(|n| n.to_str()) {
+                Some(n) => n,
+                None => continue,
+            };
+            if name.contains(&id_marker) && (name.ends_with(".part") || name.ends_with(".ytdl")) {
+                if let Err(e) = fs::remove_file(&path).await {
+                    warn!("Abort cleanup: failed to remove {:?}: {}", path, e);
+                } else {
+                    info!("Abort cleanup: removed partial file {:?}", path);
+                }
+            }
+        }
+    }
+
+    let temp_dir = DOWNLOAD_DIR.join(format!("playlist-temp-{}", download_id));
+    if temp_dir.exists() {
+        if let Err(e) = fs::remove_dir_all(&temp_dir).await {
+            warn!("Abort cleanup: failed to remove {:?}: {}", temp_dir, e);
+        } else {
+            info!("Abort cleanup: removed playlist temp dir {:?}", temp_dir);
+        }
+    }
+}
+
+pub async fn abort_download(
+    State(state): State<SharedState>,
+    headers: axum::http::HeaderMap,
+    Path(download_id): Path<String>,
+) -> AppResult<Json<ApiResponse<serde_json::Value>>> {
+    if !is_authenticated(&headers, None, &state).await {
+        return Err(AppError::Unauthorized {
+            message: "Unauthorized".to_string(),
+        });
+    }
+
+    // 1. Kill all yt-dlp child processes of this download. Single downloads are
+    //    registered under the plain id, playlist videos under "<id>-<index>".
+    let mut killed = 0usize;
+    {
+        let mut children = state.active_children.lock().await;
+        let prefix = format!("{}-", download_id);
+        let ids: Vec<String> = children
+            .keys()
+            .filter(|k| *k == &download_id || k.starts_with(&prefix))
+            .cloned()
+            .collect();
+        for id in ids {
+            if let Some(mut child) = children.remove(&id) {
+                let _ = child.kill().await;
+                killed += 1;
+            }
+        }
+    }
+    info!("Aborting download {}: killed {} process(es)", download_id, killed);
+
+    // 2. Mark as aborted so the SSE stream notifies clients and the task's own
+    //    error handling does not overwrite the status afterwards.
+    let was_running = {
+        let mut downloads = state.active_downloads.lock().await;
+        match downloads.get_mut(&download_id) {
+            Some(info) if info.status == "queued" || info.status == "processing" => {
+                info.status = "aborted".to_string();
+                info.speed = None;
+                info.eta = None;
+                true
+            }
+            _ => false,
+        }
+    };
+
+    if !was_running {
+        return Ok(Json(ApiResponse {
+            success: false,
+            data: None,
+            error: Some("Download läuft nicht mehr".to_string()),
+        }));
+    }
+
+    cleanup_partial_files(&download_id).await;
+
+    Ok(Json(ApiResponse {
+        success: true,
+        data: Some(serde_json::json!({ "status": "aborted" })),
+        error: None,
+    }))
+}
+
 pub async fn progress_stream(
     State(state): State<SharedState>,
     headers: axum::http::HeaderMap,
@@ -952,7 +1049,8 @@ pub async fn progress_stream(
                 }
             };
 
-            let should_break = status == "completed" || status == "error";
+            let should_break =
+                status == "completed" || status == "error" || status == "aborted";
             let download_url = if status == "completed" && file_path.is_some() {
                 Some(format!("/api/file/{}", download_id))
             } else {

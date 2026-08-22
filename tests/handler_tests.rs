@@ -449,7 +449,7 @@ async fn login_rate_limiting_blocks_after_max_attempts() {
     for attempt in 0..6usize {
         let result = handlers::login(
             State(state.clone()),
-            addr.clone(),
+            addr,
             Json(LoginRequest {
                 password: format!("guess-{}", attempt),
             }),

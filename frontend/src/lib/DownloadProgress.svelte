@@ -1,10 +1,12 @@
 <script>
-  import { downloading, queued, progress, completed, speed, eta, downloadUrl, auth } from '../stores.js';
-  import { startDownload, resetApp } from '../api.js';
+  import { downloading, queued, progress, completed, speed, eta, downloadUrl, auth, aborting } from '../stores.js';
+  import { startDownload, abortDownload, resetApp } from '../api.js';
 
   $: fullDownloadUrl = $downloadUrl
     ? $downloadUrl + ($auth.token ? ($downloadUrl.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent($auth.token) : '')
     : '#';
+
+  $: preparing = $downloading && !$queued && $progress <= 0;
 </script>
 
 <div class="dl-wrap">
@@ -15,8 +17,9 @@
     disabled={$downloading || $completed}
     aria-busy={$downloading}
   >
-    {#if $downloading && !$queued && $progress > 0}
-      <div class="dl-progress" style="width:{$progress}%" aria-hidden="true"></div>
+    <div class="dl-progress" style="width:{$progress}%" aria-hidden="true"></div>
+    {#if preparing}
+      <div class="dl-progress dl-progress-indeterminate" aria-hidden="true"></div>
     {/if}
     <div class="dl-content">
       <div class="dl-main">
@@ -35,7 +38,9 @@
         {/if}
         <span>
           {$downloading
-            ? ($queued ? 'In der Warteschlange...' : `Wird heruntergeladen (${$progress}%)`)
+            ? ($queued
+                ? 'In der Warteschlange...'
+                : (preparing ? 'Wird vorbereitet...' : `Wird heruntergeladen (${$progress}%)`))
             : ($completed ? 'Abgeschlossen' : 'Download starten')}
         </span>
       </div>
@@ -48,6 +53,21 @@
       {/if}
     </div>
   </button>
+
+  {#if $downloading}
+    <button
+      type="button"
+      class="btn-abort reveal"
+      on:click={abortDownload}
+      disabled={$aborting}
+      aria-label="Download abbrechen"
+    >
+      <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M6 6l12 12M18 6L6 18"/>
+      </svg>
+      {$aborting ? 'Wird abgebrochen …' : 'Abbrechen'}
+    </button>
+  {/if}
 </div>
 
 {#if $completed}

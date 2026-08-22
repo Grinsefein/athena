@@ -23,6 +23,14 @@ export default defineConfig({
     viteSingleFile({ removeOptionalTags: true }),
     renameToFrontendHtml()
   ],
+  server: {
+    proxy: {
+      '/api': {
+        target: 'http://localhost:8000',
+        changeOrigin: true
+      }
+    }
+  },
   build: {
     outDir: '../',
     emptyOutDir: false

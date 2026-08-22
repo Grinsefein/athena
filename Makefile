@@ -69,12 +69,16 @@ dev-server:
 
 dev: quick-setup build run
 
-build:
+build-frontend:
+	@echo "Building Svelte frontend with Vite..."
+	@cd frontend && npm install && npm run build
+
+build: build-frontend
 	@echo "Building debug binary..."
 	@cargo build
 	@echo "✓ Binary at: target/debug/athena"
 
-release:
+release: build-frontend
 	@echo "Building optimized release binary..."
 	@cargo build --release
 	@echo "✓ Binary at: target/release/athena"

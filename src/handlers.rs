@@ -1,8 +1,12 @@
 use axum::{
     body::Body,
-    extract::{ConnectInfo, Path, Query, State},
+    extract::{
+        ConnectInfo, FromRequest, Multipart, Path, Query, Request, State,
+    },
     http::{
-        header::{CACHE_CONTROL, CONTENT_TYPE},
+        header::{
+            self, CACHE_CONTROL, CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE,
+        },
         StatusCode,
     },
     response::{sse::Event, Html, IntoResponse, Json, Redirect, Response, Sse},
@@ -10,10 +14,10 @@ use axum::{
 use futures::stream::Stream;
 use once_cell::sync::Lazy;
 use regex::Regex;
-use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::{collections::HashMap, io::SeekFrom, net::{IpAddr, Ipv4Addr}};
 use tokio::{
     fs,
+    io::{AsyncReadExt, AsyncSeekExt},
     process::Command,
     time::{sleep, Duration},
 };
@@ -23,12 +27,13 @@ use uuid::Uuid;
 use crate::errors::{AppError, AppResult};
 use crate::models::{
     AnalyzeResponse, ApiResponse, ConfigResponse, DownloadRequest, DownloadResponse, FormatInfo,
-    LoginRequest, LoginResponse, PlaylistVideo, ProgressUpdate, ShareRequest,
+    LoginRequest, LoginResponse, PlaylistVideo, ProgressUpdate,
 };
 use crate::state::{
-    delete_download_artifacts, get_cached_meta, now_secs, store_cached_meta, touch_download,
-    ANALYZE_SEMAPHORE, AppState, DownloadInfo, SharedState, PASSWORD_HASH, TOKEN_MAX_AGE_SECS,
-    DOWNLOAD_DIR,
+    consume_rate_limit, delete_download_artifacts, get_cached_meta, now_secs, store_cached_meta,
+    touch_download, verify_password, ANALYZE_SEMAPHORE, AppState, DownloadInfo, SharedState,
+    PASSWORD_HASH, TOKEN_MAX_AGE_SECS, API_WINDOW_SECS, DOWNLOAD_DIR, MAX_ANALYZE_PER_WINDOW,
+    MAX_DOWNLOADS_PER_WINDOW,
 };
 use crate::ytdlp::{
     download_task, get_audio_multiplier, map_audio_format_name, playlist_download_task,
@@ -76,12 +81,169 @@ pub async fn icon_handler() -> impl IntoResponse {
     )
 }
 
-fn validate_url(url: &str) -> AppResult<()> {
-    if (url.starts_with("http://") || url.starts_with("https://")) && url.len() <= 2048 {
+/// Escape hatch for deployments that explicitly want to hand internal
+/// targets to yt-dlp (e.g. testing against a local media server).
+static UNSAFE_ALLOW_PRIVATE_TARGETS: Lazy<bool> = Lazy::new(|| {
+    std::env::var("ATHENA_UNSAFE_ALLOW_PRIVATE_TARGETS")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+});
+
+fn invalid_url(message: &str) -> AppError {
+    AppError::InvalidUrl {
+        message: message.to_string(),
+    }
+}
+
+/// True only for addresses that are safe to let an external fetcher dial.
+///
+/// Blocks loopback, RFC 1918/4193 private ranges, link-local (incl. the
+/// IPv4-mapped/NAT64 embedded forms), CGNAT, benchmarking, reserved and
+/// documentation ranges.
+pub(crate) fn is_public_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => is_public_ipv4(v4),
+        IpAddr::V6(v6) => {
+            // ::ffff:a.b.c.d embeds a plain IPv4 address that must go through
+            // the IPv4 checks; 64:ff9b::/96 does the same for NAT64.
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                return is_public_ipv4(v4);
+            }
+            if v6.segments()[0] == 0x0064
+                && v6.segments()[1] == 0xff9b
+                && v6.segments()[2..6].iter().all(|&s| s == 0)
+            {
+                // Well-known NAT64 prefix 64:ff9b::/96: the last two segments
+                // hold an embedded IPv4 address.
+                let seg = v6.segments();
+                let v4 = Ipv4Addr::new(
+                    (seg[6] >> 8) as u8,
+                    (seg[6] & 0xff) as u8,
+                    (seg[7] >> 8) as u8,
+                    (seg[7] & 0xff) as u8,
+                );
+                return is_public_ipv4(v4);
+            }
+
+            let seg = v6.segments();
+            !(v6.is_loopback()
+                || v6.is_unspecified()
+                || (seg[0] & 0xfe00) == 0xfc00   // fc00::/7 unique local
+                || (seg[0] & 0xffc0) == 0xfe80)  // fe80::/10 link-local
+        }
+    }
+}
+
+fn is_public_ipv4(v4: Ipv4Addr) -> bool {
+    let o = v4.octets();
+    !(o[0] == 0                                        // "this network"
+        || o[0] == 10                                  // RFC 1918
+        || o[0] == 127                                 // loopback
+        || (o[0] == 172 && o[1] >= 16 && o[1] <= 31)   // RFC 1918
+        || (o[0] == 192 && o[1] == 168)                // RFC 1918
+        || (o[0] == 169 && o[1] == 254)                // link-local
+        || (o[0] == 100 && o[1] >= 64 && o[1] <= 127)  // CGNAT 100.64/10
+        || (o[0] == 192 && o[1] == 0 && o[2] == 0)     // 192.0.0.0/24
+        || (o[0] == 198 && (o[1] == 18 || o[1] == 19)) // benchmarking 198.18/15
+        || o[0] >= 240                                 // reserved class E + broadcast
+        || o == [255, 255, 255, 255])
+}
+
+/// Hostname heuristics against trivially internal names. Real protection for
+/// public-looking names comes from the DNS resolution check below.
+fn is_forbidden_hostname(host_lower: &str) -> bool {
+    host_lower == "localhost"
+        || host_lower.ends_with(".localhost")
+        || host_lower.ends_with(".local")
+        || host_lower.ends_with(".internal")
+        || host_lower.ends_with(".lan")
+        || host_lower.ends_with(".home.arpa")
+        || !host_lower.contains('.')
+}
+
+async fn validate_url(url: &str) -> AppResult<()> {
+    if !((url.starts_with("http://") || url.starts_with("https://")) && url.len() <= 2048) {
+        return Err(invalid_url("Nur vollständige http(s)-URLs werden unterstützt"));
+    }
+
+    let parsed = url::Url::parse(url)
+        .map_err(|_| invalid_url("Nur vollständige http(s)-URLs werden unterstützt"))?;
+
+    if !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err(invalid_url("URLs mit Zugangsdaten werden nicht unterstützt"));
+    }
+
+    if *UNSAFE_ALLOW_PRIVATE_TARGETS {
+        return Ok(());
+    }
+
+    let host = parsed
+        .host_str()
+        .filter(|h| !h.is_empty())
+        // url::Url serializes IPv6 hosts with brackets ("[::1]")
+        .map(|h| h.trim_start_matches('[').trim_end_matches(']'))
+        .filter(|h| !h.is_empty())
+        .ok_or_else(|| invalid_url("URL enthält keinen Host"))?;
+
+    // Literal IP addresses are checked directly ...
+    if let Ok(ip) = host.parse::<IpAddr>() {
+        if !is_public_ip(ip) {
+            return Err(invalid_url(
+                "Zugriff auf lokale oder interne Adressen ist nicht erlaubt",
+            ));
+        }
+        return Ok(());
+    }
+
+    // ... everything else must at least look public and resolve to
+    // exclusively public addresses.
+    let host_lower = host.to_ascii_lowercase();
+    if is_forbidden_hostname(&host_lower) {
+        return Err(invalid_url(
+            "Zugriff auf lokale oder interne Adressen ist nicht erlaubt",
+        ));
+    }
+
+    let port = parsed.port_or_known_default().unwrap_or(80);
+    let resolved = tokio::net::lookup_host((host_lower.as_str(), port))
+        .await
+        .map_err(|_| invalid_url(&format!("Host '{host}' konnte nicht aufgelöst werden")))?;
+
+    if resolved.map(|addr| addr.ip()).any(|ip| !is_public_ip(ip)) {
+        return Err(invalid_url(
+            "Zieladresse verweist auf eine lokale oder interne Adresse",
+        ));
+    }
+
+    Ok(())
+}
+
+/// Per-IP sliding-window rate limit for the expensive API endpoints
+/// (/api/analyze, /api/download). Complements the global concurrency
+/// semaphores, which alone cannot stop a single client from flooding the
+/// queue when no password is configured.
+async fn enforce_api_rate_limit(
+    state: &AppState,
+    endpoint: &str,
+    ip: std::net::IpAddr,
+) -> AppResult<()> {
+    let max = match endpoint {
+        "analyze" => *MAX_ANALYZE_PER_WINDOW,
+        "download" => *MAX_DOWNLOADS_PER_WINDOW,
+        _ => unreachable!("unknown rate-limit endpoint"),
+    };
+
+    if consume_rate_limit(&state.api_rate_limits, &format!("{endpoint}:{ip}"), max, API_WINDOW_SECS)
+        .await
+    {
         Ok(())
     } else {
-        Err(AppError::InvalidUrl {
-            message: "Nur vollständige http(s)-URLs werden unterstützt".to_string(),
+        warn!(
+            "Rate limited {endpoint} request from {ip} (limit: {max}/{})",
+            API_WINDOW_SECS as u64
+        );
+        Err(AppError::TooManyRequests {
+            message: "Zu viele Anfragen. Bitte einen Moment warten.".to_string(),
         })
     }
 }
@@ -201,16 +363,6 @@ fn content_disposition_value(file_name: &str) -> String {
     )
 }
 
-fn constant_time_eq(a: &str, b: &str) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    a.bytes()
-        .zip(b.bytes())
-        .fold(0u8, |acc, (x, y)| acc | (x ^ y))
-        == 0
-}
-
 fn is_permission_problem(detail: &str) -> bool {
     let d = detail.to_lowercase();
     d.contains("unable to write")
@@ -239,11 +391,27 @@ fn extract_command_detail(stdout: &str, stderr: &str) -> String {
     truncated.to_string()
 }
 
-pub async fn handle_share(Json(request): Json<ShareRequest>) -> Redirect {
-    let candidate = request.url.or_else(|| {
-        request
-            .text
-            .as_deref()
+/// Web Share Target entry point.
+///
+/// Android sends the shared fields either as `multipart/form-data` or as
+/// `application/x-www-form-urlencoded` (those are the only two encodings
+/// allowed by the Web Share Target spec), so both must be understood here.
+pub async fn handle_share(request: axum::extract::Request) -> Redirect {
+    let content_type = request
+        .headers()
+        .get(CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+
+    let (url, text) = if content_type.starts_with("multipart/form-data") {
+        extract_share_fields_multipart(request).await
+    } else {
+        extract_share_fields_urlencoded(request).await
+    };
+
+    let candidate = url.or_else(|| {
+        text.as_deref()
             .and_then(|text| SHARE_URL_REGEX.find(text).map(|m| m.as_str().to_string()))
     });
 
@@ -251,6 +419,52 @@ pub async fn handle_share(Json(request): Json<ShareRequest>) -> Redirect {
         Some(url) => Redirect::to(&format!("/?share={}", percent_encode(&url))),
         None => Redirect::to("/"),
     }
+}
+
+async fn extract_share_fields_multipart(
+    request: Request,
+) -> (Option<String>, Option<String>) {
+    let mut multipart = match Multipart::from_request(request, &()).await {
+        Ok(m) => m,
+        Err(_) => return (None, None),
+    };
+
+    let mut url = None;
+    let mut text = None;
+    while let Ok(Some(field)) = multipart.next_field().await {
+        let name = field.name().unwrap_or("").to_string();
+        let value = match field.text().await {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+        match name.as_str() {
+            "url" if url.is_none() => url = Some(value),
+            "text" if text.is_none() => text = Some(value),
+            _ => {}
+        }
+    }
+    (url, text)
+}
+
+async fn extract_share_fields_urlencoded(
+    request: Request,
+) -> (Option<String>, Option<String>) {
+    const MAX_FORM_BYTES: usize = 64 * 1024;
+    let bytes = match axum::body::to_bytes(request.into_body(), MAX_FORM_BYTES).await {
+        Ok(b) => b,
+        Err(_) => return (None, None),
+    };
+
+    let mut url = None;
+    let mut text = None;
+    for (key, value) in form_urlencoded::parse(&bytes) {
+        match key.as_ref() {
+            "url" if url.is_none() => url = Some(value.into_owned()),
+            "text" if text.is_none() => text = Some(value.into_owned()),
+            _ => {}
+        }
+    }
+    (url, text)
 }
 
 pub async fn is_authenticated(
@@ -312,12 +526,8 @@ pub async fn login(
         }
     }
 
-    if let Some(ref hash) = *PASSWORD_HASH {
-        let mut hasher = Sha256::new();
-        hasher.update(request.password.as_bytes());
-        let input_hash = hex::encode(hasher.finalize());
-
-        if constant_time_eq(&input_hash, hash) {
+    if PASSWORD_HASH.is_some() {
+        if verify_password(&request.password) {
             {
                 let mut attempts = state.login_attempts.lock().await;
                 attempts.remove(&client_ip);
@@ -352,6 +562,35 @@ pub async fn login(
         }),
         error: None,
     }))
+}
+
+/// Invalidate the presented auth token (logout / device loss).
+///
+/// Idempotent by design: an unknown or already-expired token still answers
+/// with success so clients can clear their local state either way.
+pub async fn logout(
+    State(state): State<SharedState>,
+    headers: axum::http::HeaderMap,
+    Query(params): Query<HashMap<String, String>>,
+) -> Json<ApiResponse<serde_json::Value>> {
+    let query_token = params.get("token").map(|s| s.as_str());
+    let token = headers
+        .get("authorization")
+        .and_then(|h| h.to_str().ok())
+        .and_then(|h| h.strip_prefix("Bearer "))
+        .or(query_token);
+
+    let removed = match token.filter(|t| !t.is_empty()) {
+        Some(t) => state.auth_tokens.lock().await.remove(t).is_some(),
+        None => false,
+    };
+
+    info!(removed, "Logout processed");
+    Json(ApiResponse {
+        success: true,
+        data: Some(serde_json::json!({ "logged_out": removed })),
+        error: None,
+    })
 }
 
 fn format_filesize(bytes: f64) -> Option<String> {
@@ -575,6 +814,7 @@ fn build_analyze_response(info: &serde_json::Value, canonical_url: &str) -> Anal
 
 pub async fn analyze_video(
     State(state): State<SharedState>,
+    ConnectInfo(addr): ConnectInfo<std::net::SocketAddr>,
     headers: axum::http::HeaderMap,
     Json(request): Json<DownloadRequest>,
 ) -> AppResult<Json<ApiResponse<AnalyzeResponse>>> {
@@ -584,7 +824,9 @@ pub async fn analyze_video(
         });
     }
 
-    validate_url(&request.url)?;
+    enforce_api_rate_limit(&state, "analyze", addr.ip()).await?;
+
+    validate_url(&request.url).await?;
     let canonical_url = canonicalize_url(&request.url);
     info!("Analyzing video/playlist: {}", request.url);
 
@@ -828,6 +1070,7 @@ pub async fn trigger_ytdlp_update(
 
 pub async fn start_download(
     State(state): State<SharedState>,
+    ConnectInfo(addr): ConnectInfo<std::net::SocketAddr>,
     headers: axum::http::HeaderMap,
     Json(request): Json<DownloadRequest>,
 ) -> AppResult<Json<ApiResponse<DownloadResponse>>> {
@@ -837,11 +1080,13 @@ pub async fn start_download(
         });
     }
 
-    validate_url(&request.url)?;
+    enforce_api_rate_limit(&state, "download", addr.ip()).await?;
+
+    validate_url(&request.url).await?;
     let canonical_url = canonicalize_url(&request.url);
     if let Some(urls) = &request.playlist_urls {
         for url in urls {
-            validate_url(url)?;
+            validate_url(url).await?;
         }
     }
 
@@ -1119,6 +1364,77 @@ pub async fn progress_stream(
     sse_response
 }
 
+/// Outcome of parsing a `Range` header against a concrete file size.
+#[derive(Debug, PartialEq)]
+enum ParsedRange {
+    /// Serve the whole file (no header, malformed syntax, or multi-range).
+    Full,
+    /// `bytes=start-end` (inclusive), already clamped to the file size.
+    Partial { start: u64, length: u64 },
+    /// Syntactically valid but outside the file -> answer with 416.
+    Unsatisfiable,
+}
+
+/// Parse a single-range `Range` header (RFC 9110 §14) against `size`.
+///
+/// Malformed headers are ignored (serve the full file) as mandated by the
+/// spec; multi-range requests are deliberately not supported and also fall
+/// back to the full response.
+fn parse_range_header(range: Option<&str>, size: u64) -> ParsedRange {
+    let Some(spec) = range.and_then(|r| r.strip_prefix("bytes=")) else {
+        return ParsedRange::Full;
+    };
+
+    if spec.contains(',') {
+        return ParsedRange::Full;
+    }
+
+    let Some((start_raw, end_raw)) = spec.trim().split_once('-') else {
+        return ParsedRange::Full;
+    };
+    let start_raw = start_raw.trim();
+    let end_raw = end_raw.trim();
+
+    if start_raw.is_empty() {
+        // Suffix form: last N bytes ("bytes=-500")
+        let Ok(suffix_len) = end_raw.parse::<u64>() else {
+            return ParsedRange::Full;
+        };
+        if suffix_len == 0 || size == 0 {
+            return ParsedRange::Unsatisfiable;
+        }
+        let start = size.saturating_sub(suffix_len);
+        return ParsedRange::Partial {
+            start,
+            length: size - start,
+        };
+    }
+
+    let Ok(start) = start_raw.parse::<u64>() else {
+        return ParsedRange::Full;
+    };
+    if start >= size {
+        return ParsedRange::Unsatisfiable;
+    }
+
+    let end = if end_raw.is_empty() {
+        size - 1
+    } else {
+        let Ok(end) = end_raw.parse::<u64>() else {
+            return ParsedRange::Full;
+        };
+        if end < start {
+            return ParsedRange::Full;
+        }
+        end.min(size - 1)
+    };
+
+    ParsedRange::Partial {
+        start,
+        length: end - start + 1,
+    }
+}
+
 pub async fn download_file(
     State(state): State<SharedState>,
     headers: axum::http::HeaderMap,
@@ -1174,22 +1490,62 @@ pub async fn download_file(
 
     let file_size = fs::metadata(&file_path).await?.len();
 
-    let file = tokio::fs::File::open(&file_path).await?;
-    let stream = tokio_util::io::ReaderStream::new(file);
+    // Resume support: honor a single-range Range header so interrupted
+    // transfers can continue instead of restarting (mobile networks!).
+    let parsed_range = parse_range_header(
+        headers.get(header::RANGE).and_then(|v| v.to_str().ok()),
+        file_size,
+    );
+
+    let (status, start, length) = match parsed_range {
+        ParsedRange::Full => (StatusCode::OK, 0, file_size),
+        ParsedRange::Partial { start, length } => {
+            info!(
+                "Partial download request for {} ({}-{} of {} bytes)",
+                download_id,
+                start,
+                start + length - 1,
+                file_size
+            );
+            (StatusCode::PARTIAL_CONTENT, start, length)
+        }
+        ParsedRange::Unsatisfiable => {
+            return Ok((
+                StatusCode::RANGE_NOT_SATISFIABLE,
+                [(CONTENT_RANGE, format!("bytes */{file_size}"))],
+            )
+                .into_response());
+        }
+    };
+
+    let mut file = tokio::fs::File::open(&file_path).await?;
+    if start > 0 {
+        file.seek(SeekFrom::Start(start)).await?;
+    }
+    let stream = tokio_util::io::ReaderStream::new(file.take(length));
     let body = Body::from_stream(stream);
 
     let disposition = content_disposition_value(&clean_name);
 
-    let mut response = (StatusCode::OK, body).into_response();
+    let mut response = (status, body).into_response();
     let response_headers = response.headers_mut();
     response_headers.insert(CONTENT_TYPE, "application/octet-stream".parse().unwrap());
+    response_headers.insert(header::ACCEPT_RANGES, "bytes".parse().unwrap());
+    response_headers.insert(CONTENT_LENGTH, length.to_string().parse().unwrap());
+    if status == StatusCode::PARTIAL_CONTENT {
+        response_headers.insert(
+            CONTENT_RANGE,
+            format!("bytes {}-{}/{file_size}", start, start + length - 1)
+                .parse()
+                .unwrap(),
+        );
+    }
     response_headers.insert(
         "content-disposition",
         disposition.parse().map_err(|_| AppError::Internal {
             message: "Invalid content disposition".to_string(),
         })?,
     );
-    response_headers.insert("content-length", file_size.to_string().parse().unwrap());
     response_headers.insert("x-content-type-options", "nosniff".parse().unwrap());
 
     Ok(response)
@@ -1264,51 +1620,214 @@ mod tests {
 
     // ---------- validate_url ----------
 
+    #[tokio::test]
+    async fn test_validate_url_accepts_http() {
+        assert!(validate_url("http://93.184.216.34").await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_validate_url_accepts_https() {
+        // Literal public IP keeps this test free of DNS lookups
+        assert!(validate_url("https://93.184.216.34/watch?v=abc")
+            .await
+            .is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_validate_url_rejects_empty() {
+        assert!(validate_url("").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_validate_url_rejects_relative_path() {
+        assert!(validate_url("/etc/passwd").await.is_err());
+        assert!(validate_url("../../etc/passwd").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_validate_url_rejects_other_schemes() {
+        for url in [
+            "ftp://example.com/file",
+            "file:///etc/passwd",
+            "javascript:alert(1)",
+            "data:text/html,x",
+        ] {
+            assert!(
+                validate_url(url).await.is_err(),
+                "{url} must be rejected"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_validate_url_rejects_option_injection() {
+        assert!(validate_url("--config-file=/tmp/evil").await.is_err());
+        assert!(validate_url("-o/tmp/evil").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_validate_url_rejects_too_long() {
+        let long = format!("https://93.184.216.34/{}", "a".repeat(3000));
+        assert!(validate_url(&long).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_validate_url_accepts_at_limit() {
+        let url = format!("https://93.184.216.34/{}", "a".repeat(2000));
+        assert!(validate_url(&url).await.is_ok());
+    }
+
+    // ---------- validate_url: SSRF protection ----------
+
+    #[tokio::test]
+    async fn test_validate_url_rejects_private_ipv4_targets() {
+        for host in [
+            "http://127.0.0.1/",
+            "http://10.0.0.5/",
+            "http://172.16.1.1/",
+            "http://192.168.178.40/",
+            "http://169.254.169.254/latest/meta-data/", // cloud metadata
+            "http://100.64.0.1/",                       // CGNAT
+            "http://0.0.0.0/",
+        ] {
+            assert!(
+                validate_url(host).await.is_err(),
+                "{host} must be rejected as internal target"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_validate_url_rejects_internal_ipv6_targets() {
+        for host in [
+            "http://[::1]/",
+            "http://[fe80::1]/",
+            "http://[fc00::1]/",
+            "http://[fd12:3456::1]/",
+            "http://[::ffff:192.168.1.1]/",  // IPv4-mapped private
+            "http://[::ffff:127.0.0.1]/",    // IPv4-mapped loopback
+            "http://[64:ff9b::c0a8:102]/",   // NAT64-mapped 192.168.1.2
+        ] {
+            assert!(
+                validate_url(host).await.is_err(),
+                "{host} must be rejected as internal target"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_validate_url_rejects_localhost_and_intranet_names() {
+        for host in [
+            "http://localhost/",
+            "http://localhost:8000/",
+            "http://pi.hole.local/",
+            "http://fritz.box.internal/",
+            "http://nas.lan/",
+            "http://intranet.home.arpa/",
+            "http://myserver/", // dotless intranet name
+        ] {
+            assert!(
+                validate_url(host).await.is_err(),
+                "{host} must be rejected as internal-looking hostname"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_validate_url_rejects_embedded_credentials() {
+        assert!(validate_url("http://user:pass@93.184.216.34/")
+            .await
+            .is_err());
+        assert!(validate_url("http://admin@192.168.0.1/admin").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_validate_url_public_ip_still_allowed() {
+        assert!(is_public_ip(IpAddr::V4(Ipv4Addr::new(142, 250, 74, 110))));
+        assert!(is_public_ip(IpAddr::V6(
+            "2606:4700::6810:85e5".parse().unwrap()
+        )));
+        assert!(!is_public_ip(IpAddr::V4(Ipv4Addr::new(192, 168, 1, 1))));
+        assert!(!is_public_ip(IpAddr::V6("::1".parse().unwrap())));
+    }
+
+    // ---------- parse_range_header ----------
+
     #[test]
-    fn test_validate_url_accepts_http() {
-        assert!(validate_url("http://example.com").is_ok());
+    fn test_range_no_header_serves_full_file() {
+        assert_eq!(
+            parse_range_header(None, 1000),
+            ParsedRange::Full,
+            "missing Range header must serve the whole file"
+        );
+        assert_eq!(
+            parse_range_header(Some(""), 1000),
+            ParsedRange::Full,
+            "empty Range header must serve the whole file"
+        );
+        assert_eq!(
+            parse_range_header(Some("items=0-99"), 1000),
+            ParsedRange::Full,
+            "non-bytes units are ignored"
+        );
     }
 
     #[test]
-    fn test_validate_url_accepts_https() {
-        assert!(validate_url("https://www.youtube.com/watch?v=abc").is_ok());
+    fn test_range_malformed_headers_are_ignored() {
+        for header in ["bytes=", "bytes=abc", "bytes=50-20", "bytes=1-2,3-4"] {
+            assert_eq!(
+                parse_range_header(Some(header), 1000),
+                ParsedRange::Full,
+                "malformed Range '{header}' must serve the full file"
+            );
+        }
     }
 
     #[test]
-    fn test_validate_url_rejects_empty() {
-        assert!(validate_url("").is_err());
+    fn test_range_simple_partial_requests() {
+        assert_eq!(
+            parse_range_header(Some("bytes=0-99"), 1000),
+            ParsedRange::Partial { start: 0, length: 100 }
+        );
+        assert_eq!(
+            parse_range_header(Some("bytes=100-"), 1000),
+            ParsedRange::Partial { start: 100, length: 900 }
+        );
+        // end beyond file size gets clamped
+        assert_eq!(
+            parse_range_header(Some("bytes=900-999999"), 1000),
+            ParsedRange::Partial { start: 900, length: 100 }
+        );
     }
 
     #[test]
-    fn test_validate_url_rejects_relative_path() {
-        assert!(validate_url("/etc/passwd").is_err());
-        assert!(validate_url("../../etc/passwd").is_err());
+    fn test_range_suffix_requests() {
+        assert_eq!(
+            parse_range_header(Some("bytes=-500"), 1000),
+            ParsedRange::Partial { start: 500, length: 500 }
+        );
+        // suffix longer than the file serves everything
+        assert_eq!(
+            parse_range_header(Some("bytes=-5000"), 1000),
+            ParsedRange::Partial { start: 0, length: 1000 }
+        );
     }
 
     #[test]
-    fn test_validate_url_rejects_other_schemes() {
-        assert!(validate_url("ftp://example.com/file").is_err());
-        assert!(validate_url("file:///etc/passwd").is_err());
-        assert!(validate_url("javascript:alert(1)").is_err());
-        assert!(validate_url("data:text/html,x").is_err());
-    }
-
-    #[test]
-    fn test_validate_url_rejects_option_injection() {
-        assert!(validate_url("--config-file=/tmp/evil").is_err());
-        assert!(validate_url("-o/tmp/evil").is_err());
-    }
-
-    #[test]
-    fn test_validate_url_rejects_too_long() {
-        let long = format!("https://example.com/{}", "a".repeat(3000));
-        assert!(validate_url(&long).is_err());
-    }
-
-    #[test]
-    fn test_validate_url_accepts_at_limit() {
-        let url = format!("https://example.com/{}", "a".repeat(2000));
-        assert!(validate_url(&url).is_ok());
+    fn test_range_unsatisfiable_requests() {
+        assert_eq!(
+            parse_range_header(Some("bytes=1000-2000"), 1000),
+            ParsedRange::Unsatisfiable
+        );
+        assert_eq!(
+            parse_range_header(Some("bytes=-0"), 1000),
+            ParsedRange::Unsatisfiable
+        );
+        // empty file: every range is unsatisfiable
+        assert_eq!(
+            parse_range_header(Some("bytes=0-"), 0),
+            ParsedRange::Unsatisfiable
+        );
     }
 
     // ---------- percent_encode ----------
@@ -1397,7 +1916,8 @@ mod tests {
         assert!(fallback.chars().count() <= 121);
     }
 
-    // ---------- constant_time_eq ----------
+    // ---------- constant_time_eq (re-exported from state) ----------
+    use crate::state::constant_time_eq;
 
     #[test]
     fn test_constant_time_eq_equal() {

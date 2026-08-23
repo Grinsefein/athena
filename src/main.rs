@@ -25,6 +25,25 @@ use crate::ytdlp::{periodic_yt_dlp_update, update_yt_dlp};
 
 const MAX_BODY_BYTES: usize = 256 * 1024;
 
+/// Defense-in-depth against XSS through externally sourced metadata
+/// (video titles, playlist names, ...).
+///
+/// The frontend ships as a single inlined HTML file (vite-plugin-singlefile),
+/// so scripts and styles arrive as inline tags and need 'unsafe-inline'.
+/// Thumbnails are hot-linked from external CDNs (img-src https:), the favicon
+/// is a data: URI. Everything else is locked to the app origin.
+const CONTENT_SECURITY_POLICY: &str = "default-src 'self'; \
+    script-src 'self' 'unsafe-inline'; \
+    style-src 'self' 'unsafe-inline'; \
+    img-src 'self' https: data:; \
+    media-src 'self' https:; \
+    connect-src 'self'; \
+    font-src 'self'; \
+    object-src 'none'; \
+    base-uri 'self'; \
+    form-action 'self'; \
+    frame-ancestors 'none'";
+
 fn bind_error_hint(port: u16, err: &std::io::Error) -> String {
     if err.kind() == std::io::ErrorKind::AddrInUse {
         format!(
@@ -61,6 +80,10 @@ async fn security_headers(req: Request<Body>, next: Next) -> Response {
         HeaderValue::from_static("strict-origin-when-cross-origin"),
     );
     headers.insert("x-frame-options", HeaderValue::from_static("DENY"));
+    headers.insert(
+        "content-security-policy",
+        HeaderValue::from_static(CONTENT_SECURITY_POLICY),
+    );
     res
 }
 
@@ -109,6 +132,7 @@ async fn main() {
         auth_tokens: tokio::sync::Mutex::new(HashMap::new()),
         active_children: tokio::sync::Mutex::new(HashMap::new()),
         login_attempts: tokio::sync::Mutex::new(HashMap::new()),
+        api_rate_limits: tokio::sync::Mutex::new(HashMap::new()),
         metadata_cache: tokio::sync::Mutex::new(HashMap::new()),
     });
 
@@ -144,6 +168,7 @@ async fn main() {
         .route("/share", post(handlers::handle_share))
         .route("/api/config", get(handlers::get_config))
         .route("/api/login", post(handlers::login))
+        .route("/api/logout", post(handlers::logout))
         .route("/api/analyze", post(handlers::analyze_video))
         .route("/api/download", post(handlers::start_download))
         .route("/api/abort/:download_id", post(handlers::abort_download))

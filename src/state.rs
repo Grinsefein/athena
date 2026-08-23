@@ -1,5 +1,4 @@
 use once_cell::sync::Lazy;
-use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
     path::PathBuf,
@@ -14,13 +13,65 @@ use tokio::{
 use tracing::{info, warn};
 
 // Password protection
+//
+// ATHENA_PASSWORD accepts either format:
+// - a bcrypt hash ("$2a$", "$2b$" or "$2y$" prefix) -> recommended, generate
+//   one with `cargo run --bin hash-password -- 'your password'`
+// - plaintext (legacy behaviour, verified in constant time) -> still works,
+//   but a deprecation warning is logged on first use
 pub static PASSWORD_HASH: Lazy<Option<String>> = Lazy::new(|| {
-    std::env::var("ATHENA_PASSWORD").ok().map(|p| {
-        let mut hasher = Sha256::new();
-        hasher.update(p.as_bytes());
-        hex::encode(hasher.finalize())
-    })
+    std::env::var("ATHENA_PASSWORD")
+        .ok()
+        .filter(|p| !p.trim().is_empty())
 });
+
+fn is_bcrypt_hash(value: &str) -> bool {
+    (value.starts_with("$2a$")
+        || value.starts_with("$2b$")
+        || value.starts_with("$2y$"))
+        && value.len() >= 59
+}
+
+/// Constant-time comparison of two strings of equal length.
+pub(crate) fn constant_time_eq(a: &str, b: &str) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    a.bytes()
+        .zip(b.bytes())
+        .fold(0u8, |acc, (x, y)| acc | (x ^ y))
+        == 0
+}
+
+/// One-time hint pointing at the migration path for plaintext credentials.
+static LEGACY_PASSWORD_WARNING: Lazy<()> = Lazy::new(|| {
+    warn!(
+        "ATHENA_PASSWORD ist kein bcrypt-Hash. Empfohlen: cargo run --bin hash-password -- '<Passwort>' und den Hash in .env eintragen."
+    );
+});
+
+/// Check a login candidate against the configured credential.
+///
+/// bcrypt values are verified with the salt baked into the hash; anything
+/// else falls back to the exact constant-time plaintext comparison that
+/// releases <= 1.5 performed (there the SHA-256 was computed identically on
+/// both sides, so this is behaviour-preserving while dropping the pointless
+/// double hashing).
+pub fn verify_password_against(stored: &str, candidate: &str) -> bool {
+    if is_bcrypt_hash(stored) {
+        return bcrypt::verify(candidate, stored).unwrap_or(false);
+    }
+    Lazy::force(&LEGACY_PASSWORD_WARNING);
+    constant_time_eq(stored, candidate)
+}
+
+/// Verify a login candidate against the configured ATHENA_PASSWORD value.
+pub fn verify_password(candidate: &str) -> bool {
+    PASSWORD_HASH
+        .as_deref()
+        .map(|stored| verify_password_against(stored, candidate))
+        .unwrap_or(false)
+}
 
 // Configuration - use system temp directory for temporary storage
 pub static DOWNLOAD_DIR: Lazy<PathBuf> = Lazy::new(|| {
@@ -85,6 +136,24 @@ pub const TOKEN_MAX_AGE_SECS: f64 = 30.0 * 24.0 * 3600.0;
 pub const LOGIN_WINDOW_SECS: f64 = 900.0;
 pub const MAX_LOGIN_ATTEMPTS: usize = 5;
 
+// Per-IP request rate limiting for the expensive API endpoints
+// (/api/analyze, /api/download). Sliding window of timestamps per key.
+pub const API_WINDOW_SECS: f64 = 60.0;
+
+pub static MAX_ANALYZE_PER_WINDOW: Lazy<usize> = Lazy::new(|| {
+    std::env::var("MAX_ANALYZE_PER_MINUTE")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(12)
+});
+
+pub static MAX_DOWNLOADS_PER_WINDOW: Lazy<usize> = Lazy::new(|| {
+    std::env::var("MAX_DOWNLOADS_PER_MINUTE")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(6)
+});
+
 pub type SharedState = Arc<AppState>;
 
 #[derive(Clone, Debug)]
@@ -98,7 +167,30 @@ pub struct AppState {
     pub auth_tokens: Mutex<HashMap<String, f64>>, // Token -> creation timestamp
     pub active_children: Mutex<HashMap<String, tokio::process::Child>>, // Active yt-dlp child processes
     pub login_attempts: Mutex<HashMap<String, Vec<f64>>>, // Login rate-limiting timestamps by IP
+    pub api_rate_limits: Mutex<HashMap<String, Vec<f64>>>, // Sliding-window request timestamps keyed by "{endpoint}:{ip}"
     pub metadata_cache: Mutex<HashMap<String, CachedMeta>>, // canonical URL -> yt-dlp info JSON
+}
+
+/// Sliding-window rate limiter over a shared timestamp bucket map.
+///
+/// Records a request for `key` and returns `false` when the key already
+/// accumulated `max` requests inside `window_secs` (the rejected request is
+/// NOT recorded, so clients retrying into the limit cannot extend their ban).
+pub async fn consume_rate_limit(
+    buckets: &Mutex<HashMap<String, Vec<f64>>>,
+    key: &str,
+    max: usize,
+    window_secs: f64,
+) -> bool {
+    let now = now_secs();
+    let mut buckets = buckets.lock().await;
+    let timestamps = buckets.entry(key.to_string()).or_default();
+    timestamps.retain(|&t| now - t < window_secs);
+    if timestamps.len() >= max {
+        return false;
+    }
+    timestamps.push(now);
+    true
 }
 
 fn evict_metadata_cache(cache: &mut HashMap<String, CachedMeta>) -> usize {
@@ -310,6 +402,15 @@ pub async fn cleanup_old_data(state: &AppState) {
         attempts.retain(|_, timestamps| !timestamps.is_empty());
     }
 
+    // Cleanup stale API request-rate entries
+    {
+        let mut buckets = state.api_rate_limits.lock().await;
+        for timestamps in buckets.values_mut() {
+            timestamps.retain(|&t| current_time - t < API_WINDOW_SECS);
+        }
+        buckets.retain(|_, timestamps| !timestamps.is_empty());
+    }
+
     // Cleanup expired metadata cache entries
     {
         let mut cache = state.metadata_cache.lock().await;
@@ -350,6 +451,7 @@ mod tests {
             auth_tokens: Mutex::new(HashMap::new()),
             active_children: Mutex::new(HashMap::new()),
             login_attempts: Mutex::new(HashMap::new()),
+            api_rate_limits: Mutex::new(HashMap::new()),
             metadata_cache: Mutex::new(HashMap::new()),
         });
 
@@ -392,6 +494,7 @@ mod tests {
             auth_tokens: Mutex::new(HashMap::new()),
             active_children: Mutex::new(HashMap::new()),
             login_attempts: Mutex::new(HashMap::new()),
+            api_rate_limits: Mutex::new(HashMap::new()),
             metadata_cache: Mutex::new(HashMap::new()),
         });
 
@@ -452,6 +555,7 @@ mod auth_cleanup_tests {
             auth_tokens: Mutex::new(HashMap::new()),
             active_children: Mutex::new(HashMap::new()),
             login_attempts: Mutex::new(HashMap::new()),
+            api_rate_limits: Mutex::new(HashMap::new()),
             metadata_cache: Mutex::new(HashMap::new()),
         })
     }
@@ -636,6 +740,7 @@ mod metadata_cache_tests {
             auth_tokens: Mutex::new(HashMap::new()),
             active_children: Mutex::new(HashMap::new()),
             login_attempts: Mutex::new(HashMap::new()),
+            api_rate_limits: Mutex::new(HashMap::new()),
             metadata_cache: Mutex::new(HashMap::new()),
         })
     }
@@ -747,5 +852,67 @@ mod metadata_cache_tests {
 
         assert_eq!(cache.len(), META_CACHE_MAX_ENTRIES);
         assert!(cache.contains_key("newcomer"), "fresh entry must not be evicted");
+    }
+}
+
+#[cfg(test)]
+mod password_verification_tests {
+    use super::*;
+
+    #[test]
+    fn test_is_bcrypt_hash_detection() {
+        let hash = bcrypt::hash("secret", 4).unwrap();
+        assert!(is_bcrypt_hash(&hash));
+        assert!(!is_bcrypt_hash("plain-secret"));
+        assert!(!is_bcrypt_hash("$2a$tooshort"));
+        assert!(!is_bcrypt_hash(""));
+    }
+
+    #[test]
+    fn test_verify_password_bcrypt_path() {
+        // Cost 4 is the bcrypt minimum and keeps the test fast
+        let hash = bcrypt::hash("correct horse battery staple", 4).unwrap();
+        assert!(verify_password_against(&hash, "correct horse battery staple"));
+        assert!(!verify_password_against(&hash, "wrong password"));
+        assert!(!verify_password_against(&hash, ""));
+    }
+
+    #[test]
+    fn test_verify_password_legacy_plaintext_path() {
+        // Legacy .env values are plain strings compared exactly as before
+        assert!(verify_password_against("legacy-pw", "legacy-pw"));
+        assert!(!verify_password_against("legacy-pw", "Legacy-pw"));
+        assert!(!verify_password_against("legacy-pw", "legacy-pwx"));
+        assert!(!verify_password_against("legacy-pw", ""));
+    }
+
+    #[tokio::test]
+    async fn test_api_rate_limit_window_slides() {
+        let buckets: Mutex<HashMap<String, Vec<f64>>> = Mutex::new(HashMap::new());
+
+        for _ in 0..3 {
+            assert!(consume_rate_limit(&buckets, "analyze:1.2.3.4", 3, API_WINDOW_SECS).await);
+        }
+        // Budget exhausted
+        assert!(!consume_rate_limit(&buckets, "analyze:1.2.3.4", 3, API_WINDOW_SECS).await);
+
+        // Simulate the window sliding past all recorded timestamps
+        let now = now_secs();
+        let mut guard = buckets.lock().await;
+        guard.insert("analyze:1.2.3.4".into(), vec![now - API_WINDOW_SECS - 1.0]);
+        drop(guard);
+
+        assert!(
+            consume_rate_limit(&buckets, "analyze:1.2.3.4", 3, API_WINDOW_SECS).await,
+            "expired timestamps must free the budget again"
+        );
+    }
+
+    #[test]
+    fn test_rate_limit_keys_are_independent() {
+        // Compile-time sanity: distinct keys never share a bucket entry.
+        let analyze_key = format!("analyze:{ip}", ip = "9.9.9.9");
+        let download_key = format!("download:{ip}", ip = "9.9.9.9");
+        assert_ne!(analyze_key, download_key);
     }
 }

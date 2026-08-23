@@ -1,5 +1,5 @@
 use axum::{
-    http::StatusCode,
+    http::{HeaderValue, StatusCode},
     response::{IntoResponse, Json, Response},
 };
 use serde::{Deserialize, Serialize};
@@ -57,6 +57,10 @@ pub enum AppError {
     #[error("Unauthorized: {message}")]
     Unauthorized { message: String },
 
+    /// Error when a client exceeds the per-IP rate limit
+    #[error("Too many requests: {message}")]
+    TooManyRequests { message: String },
+
     /// Generic internal server error (fallback)
     #[error("Internal server error: {message}")]
     Internal { message: String },
@@ -76,6 +80,7 @@ impl AppError {
     pub fn status_code(&self) -> StatusCode {
         match self {
             AppError::Unauthorized { .. } => StatusCode::UNAUTHORIZED,
+            AppError::TooManyRequests { .. } => StatusCode::TOO_MANY_REQUESTS,
             AppError::ExternalCommand { .. } => StatusCode::BAD_GATEWAY,
             AppError::ParseVideoInfo { .. } => StatusCode::BAD_GATEWAY,
             AppError::DownloadNotFound { .. } => StatusCode::NOT_FOUND,
@@ -95,6 +100,7 @@ impl AppError {
     pub fn error_code(&self) -> &'static str {
         match self {
             AppError::Unauthorized { .. } => "UNAUTHORIZED",
+            AppError::TooManyRequests { .. } => "RATE_LIMITED",
             AppError::ExternalCommand { .. } => "EXTERNAL_COMMAND_ERROR",
             AppError::ParseVideoInfo { .. } => "PARSE_ERROR",
             AppError::DownloadNotFound { .. } => "DOWNLOAD_NOT_FOUND",
@@ -124,9 +130,20 @@ impl IntoResponse for AppError {
     fn into_response(self) -> Response {
         let status = self.status_code();
         let body = Json(self.to_response_payload());
-        (status, body).into_response()
+        let mut response = (status, body).into_response();
+
+        if matches!(self, AppError::TooManyRequests { .. }) {
+            if let Ok(value) = HeaderValue::from_str(&RETRY_AFTER_SECS.to_string()) {
+                response.headers_mut().insert("retry-after", value);
+            }
+        }
+
+        response
     }
 }
+
+/// Seconds a client should wait before retrying after a 429 response.
+const RETRY_AFTER_SECS: u64 = 60;
 
 // Conversions from standard library errors
 impl From<std::io::Error> for AppError {
@@ -298,6 +315,12 @@ mod tests {
                 message: "x".to_string(),
             },
             AppError::InvalidFormat {
+                message: "x".to_string(),
+            },
+            AppError::Unauthorized {
+                message: "x".to_string(),
+            },
+            AppError::TooManyRequests {
                 message: "x".to_string(),
             },
             AppError::Internal {

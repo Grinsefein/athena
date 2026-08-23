@@ -168,16 +168,8 @@ input:focus-visible, select:focus-visible {
     .card-body { padding: 0.875rem 0.75rem; }
 
     /* Focus mode: Hide hero header when user is typing in URL input on mobile */
-    .shell.focus-mode .hero,
-    .shell.results-mode .hero {
+    .shell.focus-mode .hero {
         display: none;
-    }
-
-    /* Results mode: full-screen result view, content pulled right below the
-       top bar to use the whole vertical space (no scrolling needed). */
-    .shell.results-mode {
-        padding-top: calc(var(--safe-top) + 3.9rem);
-        padding-bottom: calc(var(--safe-bottom) + 0.75rem);
     }
     .shell.results-mode .card { border-radius: var(--r-lg); }
     .shell.results-mode .card-body { padding: 0.75rem; }
@@ -228,15 +220,20 @@ input:focus-visible, select:focus-visible {
     .btn-save svg, .btn-ghost svg { width: 16px; height: 16px; }
 }
 
-/* Footer hidden while results are shown (all viewports) */
+/* Results mode: hide hero header and pull content right below top bar for fit without scrolling */
+.shell.results-mode .hero { display: none; }
+.shell.results-mode {
+    padding-top: calc(var(--safe-top) + 3.9rem);
+    padding-bottom: calc(var(--safe-bottom) + 0.75rem);
+}
 .shell.results-mode .footer { display: none; }
 
 /* ---------- Results layout ---------- */
 @media (min-width: 640px) {
     .shell.results-mode .wrap { max-width: 44rem; }
-    .shell.results-mode .card-body { padding: 1.75rem 2rem; }
-    .shell.results-mode .result { margin-top: 1.25rem; gap: 1.25rem; }
-    .shell.results-mode .dl-flow { gap: 1.25rem; }
+    .shell.results-mode .card-body { padding: 1.25rem 1.75rem; }
+    .shell.results-mode .result { margin-top: 1rem; gap: 1rem; }
+    .shell.results-mode .dl-flow { gap: 1rem; }
 }
 
 /* Desktop with playlist: two-lane layout — action flow left, playlist right.
@@ -524,6 +521,19 @@ html.dark .segmented-indicator { background: var(--surface-3); }
 }
 .segmented button[aria-pressed="true"] { color: var(--brand-700); }
 html.dark .segmented button[aria-pressed="true"] { color: var(--brand-400); }
+
+/* ---------- Format grid ---------- */
+.format-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 0.75rem;
+}
+@media (min-width: 480px) {
+    .format-grid {
+        grid-template-columns: 1fr 1fr;
+        align-items: start;
+    }
+}
 
 /* ---------- Quality select ---------- */
 .select-row { position: relative; }

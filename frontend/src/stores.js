@@ -121,6 +121,14 @@ export const downloadId = writable(null);
 export const downloadUrl = writable(null);
 export const checkingUpdate = writable(false);
 export const aborting = writable(false);
+export const wantLyrics = writable(false);
+export const lyricsPlain = writable(null);
+export const lyricsSynced = writable(null);
+
+export function clearLyrics() {
+  lyricsPlain.set(null);
+  lyricsSynced.set(null);
+}
 
 export function cleanUrl(url) {
   try {
@@ -213,6 +221,7 @@ export function connectSSE(id, authToken, opts = {}) {
       toasts.add(err, 'error');
       downloading.set(false);
       downloadId.set(null);
+      clearLyrics();
       persistSession();
       closeSSE();
       return;
@@ -227,6 +236,8 @@ export function connectSSE(id, authToken, opts = {}) {
       downloading.set(false);
       completed.set(true);
       downloadUrl.set(data.download_url);
+      lyricsPlain.set(data.lyrics_plain || null);
+      lyricsSynced.set(data.lyrics_synced || null);
       toasts.add('Download abgeschlossen!', 'success');
       persistSession();
       closeSSE();
@@ -293,6 +304,9 @@ export function persistSession() {
       downloadId: id,
       downloadUrl: get(downloadUrl),
       completed: done,
+      wantLyrics: get(wantLyrics),
+      lyricsPlain: get(lyricsPlain),
+      lyricsSynced: get(lyricsSynced),
     }));
   } catch (_) {}
 }
@@ -325,6 +339,9 @@ export function restoreSession() {
     selectedPlaylistUrls.set(
       Array.isArray(snap.selectedPlaylistUrls) ? snap.selectedPlaylistUrls : []
     );
+    wantLyrics.set(!!snap.wantLyrics);
+    lyricsPlain.set(snap.lyricsPlain || null);
+    lyricsSynced.set(snap.lyricsSynced || null);
     restored = true;
   }
 

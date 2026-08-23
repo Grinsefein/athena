@@ -1,6 +1,7 @@
 <script>
-  import { downloading, queued, progress, completed, speed, eta, downloadUrl, auth, aborting } from '../stores.js';
+  import { downloading, queued, progress, completed, speed, eta, downloadUrl, loading, auth, aborting } from '../stores.js';
   import { startDownload, abortDownload, resetApp } from '../api.js';
+  import LyricsPanel from './LyricsPanel.svelte';
 
   $: fullDownloadUrl = $downloadUrl
     ? $downloadUrl + ($auth.token ? ($downloadUrl.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent($auth.token) : '')
@@ -14,13 +15,10 @@
     type="button"
     class="dl-btn"
     on:click={startDownload}
-    disabled={$downloading || $completed}
+    disabled={$downloading || $completed || $loading}
     aria-busy={$downloading}
   >
     <div class="dl-progress" style="width:{$progress}%" aria-hidden="true"></div>
-    {#if preparing}
-      <div class="dl-progress dl-progress-indeterminate" aria-hidden="true"></div>
-    {/if}
     <div class="dl-content">
       <div class="dl-main">
         {#if $downloading}
@@ -81,4 +79,5 @@
       Neues Video
     </button>
   </div>
+  <LyricsPanel />
 {/if}

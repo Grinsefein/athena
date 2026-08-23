@@ -3,6 +3,7 @@ import {
   auth, toasts, loading, downloading, queued, completed, progress, speed, eta,
   errorMsg, videoInfo, lastAnalyzedUrl, selectedFormat, formatSlide, selectedQuality,
   selectedPlaylistUrls, downloadId, downloadUrl, checkingUpdate, aborting, urlInput,
+  wantLyrics, lyricsPlain, lyricsSynced, clearLyrics,
   cleanUrl, isValidUrl, connectSSE, closeSSE, persistSession, clearSession
 } from './stores.js';
 
@@ -105,6 +106,7 @@ export async function analyzeVideo(url) {
 
   loading.set(true);
   errorMsg.set(null);
+  clearLyrics();
   closeSSE();
   downloading.set(false);
   completed.set(false);
@@ -170,9 +172,16 @@ export function cancelAnalyze() {
 export async function startDownload() {
   const info = get(videoInfo);
   if (!info || get(downloading)) return;
+
+  if (get(loading)) {
+    toasts.add('Bitte warten – eine Analyse läuft gerade.', 'info');
+    return;
+  }
+
   downloading.set(true);
   completed.set(false);
   errorMsg.set(null);
+  clearLyrics();
   progress.set(0);
   speed.set(null);
   eta.set(null);
@@ -194,7 +203,8 @@ export async function startDownload() {
         url: currentUrl,
         format: fmt,
         quality: qual,
-        playlist_urls: (info.playlist_videos && playlistUrls.length > 0) ? playlistUrls : null
+        playlist_urls: (info.playlist_videos && playlistUrls.length > 0) ? playlistUrls : null,
+        lyrics: fmt === 'audio' && get(wantLyrics)
       })
     });
 
@@ -249,6 +259,7 @@ export async function abortDownload() {
     queued.set(false);
     speed.set(null);
     eta.set(null);
+    clearLyrics();
     downloadId.set(null);
     persistSession();
     toasts.add('Download abgebrochen', 'info');
@@ -305,5 +316,7 @@ export function resetApp() {
   downloadId.set(null);
   downloadUrl.set(null);
   selectedPlaylistUrls.set([]);
+  wantLyrics.set(false);
+  clearLyrics();
   closeSSE();
 }

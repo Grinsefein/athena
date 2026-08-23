@@ -53,7 +53,7 @@ async fn register_token(state: &SharedState, token: &str) {
 async fn root_serves_embedded_frontend() {
     let html = handlers::root().await.0;
 
-    assert!(html.contains("<title>Athena Pi</title>"), "title tag present");
+    assert!(html.contains("<title>KlauTube</title>"), "title tag present");
     assert!(html.contains("id=\"app\""), "Svelte app mount container");
     assert!(html.contains("results-mode"), "mobile results mode styling");
     assert!(html.contains("qualitySelect"), "quality select control");
@@ -196,6 +196,7 @@ fn download_request(url: &str) -> Json<DownloadRequest> {
         format: "video".to_string(),
         quality: "best".to_string(),
         playlist_urls: None,
+        lyrics: false,
     })
 }
 
@@ -230,6 +231,7 @@ async fn start_download_rejects_invalid_playlist_urls_before_subprocess() {
             "https://www.youtube.com/watch?v=ok".to_string(),
             "javascript:alert(1)".to_string(),
         ]),
+        lyrics: false,
     });
 
     let result = handlers::start_download(State(state.clone()), HeaderMap::new(), request).await;
@@ -311,6 +313,9 @@ async fn download_file_not_ready_is_404_for_queued_status() {
                 speed: None,
                 eta: None,
                 last_activity: now_secs(),
+                url: None,
+                lyrics_plain: None,
+                lyrics_synced: None,
             },
         );
     }

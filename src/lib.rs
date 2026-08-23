@@ -5,8 +5,10 @@
 
 pub mod errors;
 pub mod handlers;
+pub mod metadata;
 pub mod models;
 pub mod state;
+pub mod tags;
 pub mod ytdlp;
 
 pub use errors::{AppError, AppResult, ErrorResponse};

@@ -1,5 +1,5 @@
 <script>
-  import { videoInfo, selectedFormat, formatSlide, selectedQuality } from '../stores.js';
+  import { videoInfo, selectedFormat, formatSlide, selectedQuality, wantLyrics } from '../stores.js';
 
   function setFormat(type) {
     if ($selectedFormat !== type) {
@@ -56,3 +56,11 @@
     <p class="size-hint">Ungefähre Dateigröße: {currentFormatObj.filesize}</p>
   {/if}
 </div>
+
+<!-- Lyrics option (audio only) -->
+{#if $selectedFormat === 'audio'}
+  <label class="check-row" title="Songtext über lrclib suchen, in die Datei einbetten und als .lrc/.txt anbieten">
+    <input type="checkbox" bind:checked={$wantLyrics}>
+    <span class="check-row-text">Songtext (Lyrics) mitladen</span>
+  </label>
+{/if}

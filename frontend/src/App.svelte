@@ -7,6 +7,7 @@
   import FormatSelector from './lib/FormatSelector.svelte';
   import PlaylistSelector from './lib/PlaylistSelector.svelte';
   import DownloadProgress from './lib/DownloadProgress.svelte';
+  import { smoothHeight } from './lib/actions.js';
 
   import {
     theme, urlInput, loading, videoInfo, errorMsg, isValidUrl, restoreSession
@@ -89,14 +90,14 @@
     <!-- Header -->
     <header class="hero">
       <div class="logo-badge" aria-hidden="true">
-        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M16 5v14L5 12z"/></svg>
       </div>
-      <h1>Athena Pi</h1>
-      <p class="tagline">Einfach, schnell, zuverlässig.</p>
+      <h1>KlauTube</h1>
+      <p class="tagline">Einfach, schnell, geklaut.</p>
     </header>
 
     <!-- Main Card -->
-    <section class="card" aria-label="Video Downloader">
+    <section class="card" use:smoothHeight aria-label="Video Downloader">
       <div class="card-body">
         <!-- URL Input -->
         <div class="input-row" class:input-hidden={hideInput}>
@@ -171,8 +172,10 @@
         {#if $videoInfo}
           <div class="result reveal">
             <MediaCard />
-            <FormatSelector />
-            <PlaylistSelector />
+            <div class="result-grid">
+              <div class="result-col"><FormatSelector /></div>
+              <div class="result-col"><PlaylistSelector /></div>
+            </div>
             <DownloadProgress />
           </div>
         {/if}
@@ -180,5 +183,5 @@
     </section>
   </div>
 
-  <footer class="footer">&copy; 2026 Athena Pi Downloader &bull; Built with Rust</footer>
+  <footer class="footer">&copy; 2026 KlauTube &bull; Built with Rust</footer>
 </main>

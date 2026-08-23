@@ -1,9 +1,8 @@
-const CACHE_NAME = 'athena-pi-v2';
+const CACHE_NAME = 'athena-v3';
 const CORE_ASSETS = [
   '/',
   '/manifest.json',
-  '/app-icon.png',
-  'https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js'
+  '/app-icon.png'
 ];
 
 self.addEventListener('install', event => {

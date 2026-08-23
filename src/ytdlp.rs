@@ -1,6 +1,8 @@
 use once_cell::sync::Lazy;
 use regex::Regex;
-use std::{path::PathBuf, process::Stdio, time::Duration};
+use std::path::{Path, PathBuf};
+use std::process::Stdio;
+use std::time::Duration;
 use tokio::{
     fs,
     io::{AsyncBufReadExt, AsyncReadExt, BufReader},
@@ -9,9 +11,69 @@ use tokio::{
 };
 use tracing::{error, info, warn};
 
+use crate::metadata;
 use crate::state::{
     get_cached_meta, now_secs, store_cached_meta, SharedState, DOWNLOAD_DIR, DOWNLOAD_SEMAPHORE,
 };
+use crate::tags;
+
+async fn enrich_audio(
+    state: &SharedState,
+    download_id: &str,
+    path: &Path,
+    video_info: &serde_json::Value,
+    want_lyrics: bool,
+) -> Option<metadata::Lyrics> {
+    let (artist, track, album) = metadata::track_meta(video_info);
+    if track.is_empty() {
+        return None;
+    }
+
+    {
+        let mut downloads = state.active_downloads.lock().await;
+        if let Some(info) = downloads.get_mut(download_id) {
+            info.speed = Some("Metadaten werden vervollständigt …".to_string());
+        }
+    }
+
+    match metadata::fetch_album_art(&artist, &track).await {
+        Some(jpeg) => match tags::embed_artwork(path, &jpeg) {
+            Ok(()) => info!(
+                "Download {}: embedded real album art ({} - {})",
+                download_id, artist, track
+            ),
+            Err(e) => warn!("Download {}: album art embed failed: {}", download_id, e),
+        },
+        None => info!(
+            "Download {}: no album art found for '{} - {}'",
+            download_id, artist, track
+        ),
+    }
+
+    if !want_lyrics {
+        return None;
+    }
+
+    let duration = video_info.get("duration").and_then(|d| d.as_f64());
+    match metadata::fetch_lyrics(&artist, &track, &album, duration).await {
+        Some(lyrics) => {
+            let plain = lyrics
+                .plain
+                .clone()
+                .or_else(|| lyrics.synced.as_deref().map(metadata::strip_lrc_timestamps));
+            if let Some(p) = &plain {
+                if let Err(e) = tags::embed_lyrics(path, p) {
+                    warn!("Download {}: lyrics embed failed: {}", download_id, e);
+                }
+            }
+            Some(lyrics)
+        }
+        None => {
+            info!("Download {}: no lyrics found for '{}'", download_id, track);
+            None
+        }
+    }
+}
 
 // Pre-compiled regex for progress parsing (captures percentage, speed, and ETA)
 pub static PROGRESS_REGEX: Lazy<Regex> = Lazy::new(|| {
@@ -154,6 +216,7 @@ pub async fn download_task(
     url: String,
     format_type: String,
     quality: String,
+    want_lyrics: bool,
 ) {
     info!("Download {} waiting for semaphore...", download_id);
     let permit = DOWNLOAD_SEMAPHORE.acquire().await;
@@ -167,7 +230,7 @@ pub async fn download_task(
 
     info!("Download {} starting processing", download_id);
 
-    let result = execute_download(&state, &download_id, &url, &format_type, &quality).await;
+    let result = execute_download(&state, &download_id, &url, &format_type, &quality, want_lyrics).await;
 
     if let Err(e) = result {
         error!("Download {} failed: {}", download_id, e);
@@ -190,6 +253,7 @@ pub async fn execute_download(
     url: &str,
     format_type: &str,
     quality: &str,
+    want_lyrics: bool,
 ) -> Result<(), String> {
     let video_info: serde_json::Value = if let Some(info) = get_cached_meta(state, url).await {
         info!("Download {} using cached metadata for {}", download_id, url);
@@ -305,7 +369,9 @@ pub async fn execute_download(
     if extract_audio {
         args.push("--extract-audio");
         args.push("--audio-format");
-        args.push("best");
+        args.push("mp3");
+        args.push("--audio-quality");
+        args.push("0");
     }
 
     args.push(url);
@@ -433,6 +499,21 @@ pub async fn execute_download(
         .unwrap_or(&_file_name)
         .to_string();
 
+    if format_type == "audio" {
+        let lyrics =
+            enrich_audio(state, download_id, &final_path, &video_info, want_lyrics).await;
+        if let Some(l) = lyrics {
+            let plain = l.plain.clone().or_else(|| {
+                l.synced.as_deref().map(metadata::strip_lrc_timestamps)
+            });
+            let mut downloads = state.active_downloads.lock().await;
+            if let Some(info) = downloads.get_mut(download_id) {
+                info.lyrics_plain = plain;
+                info.lyrics_synced = l.synced;
+            }
+        }
+    }
+
     {
         let mut downloads = state.active_downloads.lock().await;
         if let Some(info) = downloads.get_mut(download_id) {
@@ -453,6 +534,7 @@ pub async fn playlist_download_task(
     urls: Vec<String>,
     format_type: String,
     quality: String,
+    want_lyrics: bool,
 ) {
     info!("Playlist download {} waiting for semaphore...", download_id);
     let permit = DOWNLOAD_SEMAPHORE.acquire().await;
@@ -469,8 +551,15 @@ pub async fn playlist_download_task(
         urls.len()
     );
 
-    let result =
-        execute_playlist_download(&state, &download_id, &urls, &format_type, &quality).await;
+    let result = execute_playlist_download(
+        &state,
+        &download_id,
+        &urls,
+        &format_type,
+        &quality,
+        want_lyrics,
+    )
+    .await;
 
     if let Err(e) = result {
         error!("Playlist download {} failed: {}", download_id, e);
@@ -493,6 +582,7 @@ pub async fn execute_playlist_download(
     urls: &[String],
     format_type: &str,
     quality: &str,
+    want_lyrics: bool,
 ) -> Result<(), String> {
     let temp_dir = DOWNLOAD_DIR.join(format!("playlist-temp-{}", download_id));
     fs::create_dir_all(&temp_dir)
@@ -501,6 +591,7 @@ pub async fn execute_playlist_download(
 
     let total_videos = urls.len();
     let mut downloaded_files = Vec::new();
+    let mut lyric_files = Vec::new();
 
     for (index, url) in urls.iter().enumerate() {
         // Stop launching new videos once the download was aborted.
@@ -623,6 +714,8 @@ pub async fn execute_playlist_download(
             args.push("--extract-audio");
             args.push("--audio-format");
             args.push("mp3");
+            args.push("--audio-quality");
+            args.push("0");
         }
 
         args.push(url);
@@ -706,12 +799,38 @@ pub async fn execute_playlist_download(
                         && !name.ends_with(".part")
                         && !name.ends_with(".ytdl")
                     {
-                        let file_ext = path.extension().and_then(|e| e.to_str()).unwrap_or(ext);
+                        let file_ext =
+                            path.extension().and_then(|e| e.to_str()).unwrap_or(ext);
                         let sanitized_title = sanitize_filename(title);
                         let target_path =
                             temp_dir.join(format!("{}.{}", sanitized_title, file_ext));
                         let _ = fs::rename(&path, &target_path).await;
                         downloaded_files.push(target_path);
+
+                        if format_type == "audio" && want_lyrics {
+                            if let Some(l) = enrich_audio(
+                                state,
+                                download_id,
+                                &temp_dir.join(format!("{}.{}", sanitized_title, file_ext)),
+                                &video_info,
+                                true,
+                            )
+                            .await
+                            {
+                                let text = l
+                                    .synced
+                                    .clone()
+                                    .or_else(|| l.plain.clone())
+                                    .unwrap_or_default();
+                                if !text.is_empty() {
+                                    let lrc_path = temp_dir
+                                        .join(format!("{}.lrc", sanitized_title));
+                                    if fs::write(&lrc_path, &text).await.is_ok() {
+                                        lyric_files.push(lrc_path);
+                                    }
+                                }
+                            }
+                        }
                         break;
                     }
                 }
@@ -749,7 +868,7 @@ pub async fn execute_playlist_download(
         let options =
             zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Deflated);
 
-        for file_path in &downloaded_files {
+        for file_path in downloaded_files.iter().chain(lyric_files.iter()) {
             if let Some(name) = file_path.file_name().and_then(|n| n.to_str()) {
                 zip.start_file(name, options)
                     .map_err(|e| format!("Failed to add file to zip: {}", e))?;

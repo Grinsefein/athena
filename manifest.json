@@ -1,8 +1,8 @@
 {
   "id": "/?source=pwa",
-  "name": "Athena Pi",
-  "short_name": "Athena",
-  "description": "Premium Video Downloader",
+  "name": "KlauTube",
+  "short_name": "KlauTube",
+  "description": "Einfacher, schneller Medien-Downloader",
   "start_url": "/?source=pwa",
   "scope": "/",
   "display": "standalone",

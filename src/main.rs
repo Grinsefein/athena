@@ -14,8 +14,10 @@ use tracing_subscriber::prelude::*;
 
 pub mod errors;
 pub mod handlers;
+pub mod metadata;
 pub mod models;
 pub mod state;
+pub mod tags;
 pub mod ytdlp;
 
 use crate::state::{AppState, SharedState, DOWNLOAD_DIR, DOWNLOAD_SEMAPHORE, PASSWORD_HASH};

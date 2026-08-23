@@ -9,6 +9,8 @@ pub struct DownloadRequest {
     pub quality: String,
     #[serde(default)]
     pub playlist_urls: Option<Vec<String>>,
+    #[serde(default)]
+    pub lyrics: bool,
 }
 
 fn default_format() -> String {
@@ -76,6 +78,10 @@ pub struct ProgressUpdate {
     pub speed: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub eta: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lyrics_plain: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lyrics_synced: Option<String>,
 }
 
 #[derive(Deserialize, Debug, Clone)]
@@ -165,6 +171,8 @@ mod tests {
             error: None,
             speed: Some("5.67 MiB/s".to_string()),
             eta: Some("00:15".to_string()),
+            lyrics_plain: Some("First line".to_string()),
+            lyrics_synced: Some("[00:01.00]First line".to_string()),
         };
         let json = serde_json::to_string(&update).unwrap();
         assert!(json.contains("\"status\":\"completed\""));
@@ -172,6 +180,8 @@ mod tests {
         assert!(json.contains("\"download_url\":\"/api/file/123\""));
         assert!(json.contains("\"speed\":\"5.67 MiB/s\""));
         assert!(json.contains("\"eta\":\"00:15\""));
+        assert!(json.contains("\"lyrics_plain\":\"First line\""));
+        assert!(json.contains("\"lyrics_synced\":\"[00:01.00]First line\""));
     }
 
     #[test]
@@ -183,12 +193,15 @@ mod tests {
             error: None,
             speed: None,
             eta: None,
+            lyrics_plain: None,
+            lyrics_synced: None,
         };
         let json = serde_json::to_string(&update).unwrap();
         assert!(!json.contains("download_url"));
         assert!(!json.contains("error"));
         assert!(!json.contains("\"speed\""));
         assert!(!json.contains("\"eta\""));
+        assert!(!json.contains("lyrics"));
     }
 
     #[test]

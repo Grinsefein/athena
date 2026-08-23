@@ -158,6 +158,9 @@ pub struct DownloadInfo {
     pub speed: Option<String>,
     pub eta: Option<String>,
     pub last_activity: f64,
+    pub url: Option<String>,
+    pub lyrics_plain: Option<String>,
+    pub lyrics_synced: Option<String>,
 }
 
 pub fn now_secs() -> f64 {
@@ -365,6 +368,9 @@ mod tests {
                     speed: None,
                     eta: None,
                     last_activity: now_secs(),
+                    url: None,
+                    lyrics_plain: None,
+                    lyrics_synced: None,
                 },
             );
         }
@@ -404,6 +410,9 @@ mod tests {
                     speed: None,
                     eta: None,
                     last_activity: now_secs(),
+                    url: None,
+                    lyrics_plain: None,
+                    lyrics_synced: None,
                 },
             );
         }
@@ -550,6 +559,9 @@ mod auth_cleanup_tests {
                     speed: None,
                     eta: None,
                     last_activity: now - *FILE_RETENTION_MINUTES * 60.0 - 5.0,
+                    url: None,
+                    lyrics_plain: None,
+                    lyrics_synced: None,
                 },
             );
             downloads.insert(
@@ -564,6 +576,9 @@ mod auth_cleanup_tests {
                     speed: None,
                     eta: None,
                     last_activity: now,
+                    url: None,
+                    lyrics_plain: None,
+                    lyrics_synced: None,
                 },
             );
         }
@@ -593,6 +608,9 @@ mod auth_cleanup_tests {
                     speed: None,
                     eta: None,
                     last_activity: now - *FILE_RETENTION_MINUTES * 60.0 - 60.0,
+                    url: None,
+                    lyrics_plain: None,
+                    lyrics_synced: None,
                 },
             );
         }

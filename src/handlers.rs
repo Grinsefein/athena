@@ -680,7 +680,7 @@ pub async fn analyze_video(
                 "Playlist mit {} Videos",
                 playlist_videos.as_ref().map(|v| v.len()).unwrap_or(0)
             ),
-            thumbnail: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23434ed1'%3E%3Cpath d='M4 6H2v14c0 1.1.9 2 2 2h14v-2H4V6zm16-4H8c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-8 12.5v-9l6 4.5-6 4.5z'/%3E%3C/svg%3E".to_string(),
+            thumbnail: "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23434ed1'%3E%3Cpath d='M4 6H2v14c0 1.1.9 2 2 2h14v-2H4V6zm16-4H8c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm-4 12.5v-9l-6 4.5 6 4.5z'/%3E%3C/svg%3E".to_string(),
             duration: String::new(),
             author: playlist_author,
             formats: vec![
@@ -850,6 +850,22 @@ pub async fn start_download(
 
     {
         let mut downloads = state.active_downloads.lock().await;
+        let conflict = downloads.values().any(|info| {
+            (info.status == "queued" || info.status == "processing")
+                && info.url.as_deref() == Some(canonical_url.as_str())
+        });
+        if conflict {
+            return Ok(Json(ApiResponse {
+                success: false,
+                data: None,
+                error: Some(
+                    "Für dieses Video läuft bereits ein Download. \
+                     Bitte warten oder den laufenden Download abbrechen."
+                        .to_string(),
+                ),
+            }));
+        }
+
         downloads.insert(
             download_id.clone(),
             DownloadInfo {
@@ -862,10 +878,14 @@ pub async fn start_download(
                 speed: None,
                 eta: None,
                 last_activity: now_secs(),
+                url: Some(canonical_url.clone()),
+                lyrics_plain: None,
+                lyrics_synced: None,
             },
         );
     }
 
+    let want_lyrics = request.lyrics;
     let state_clone = state.clone();
     let download_id_clone = download_id.clone();
     let canonical_for_task = canonical_url;
@@ -878,6 +898,7 @@ pub async fn start_download(
                     urls,
                     request.format,
                     request.quality,
+                    want_lyrics,
                 )
                 .await;
                 return;
@@ -890,6 +911,7 @@ pub async fn start_download(
             canonical_for_task,
             request.format,
             request.quality,
+            want_lyrics,
         )
         .await;
     });
@@ -1021,13 +1043,15 @@ pub async fn progress_stream(
                 error: Some("Unauthorized".to_string()),
                 speed: None,
                 eta: None,
+                lyrics_plain: None,
+                lyrics_synced: None,
             }).unwrap_or_default();
             yield Ok(Event::default().data(error_json));
             return;
         }
 
         loop {
-            let (status, progress, file_path, error, speed, eta) = {
+            let (status, progress, file_path, error, speed, eta, lyrics_plain, lyrics_synced) = {
                 let downloads = state.active_downloads.lock().await;
                 match downloads.get(&download_id) {
                     Some(info) => (
@@ -1037,6 +1061,8 @@ pub async fn progress_stream(
                         info.error.clone(),
                         info.speed.clone(),
                         info.eta.clone(),
+                        info.lyrics_plain.clone(),
+                        info.lyrics_synced.clone(),
                     ),
                     None => {
                         let json = serde_json::to_string(&ProgressUpdate {
@@ -1046,6 +1072,8 @@ pub async fn progress_stream(
                             error: Some(String::from("Download not found")),
                             speed: None,
                             eta: None,
+                            lyrics_plain: None,
+                            lyrics_synced: None,
                         }).unwrap_or_default();
                         yield Ok(Event::default().data(json));
                         break;
@@ -1068,6 +1096,8 @@ pub async fn progress_stream(
                 error,
                 speed,
                 eta,
+                lyrics_plain,
+                lyrics_synced,
             }).unwrap_or_default();
             yield Ok(Event::default().data(json));
 

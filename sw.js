@@ -1,4 +1,4 @@
-const CACHE_NAME = 'athena-v3';
+const CACHE_NAME = 'athena-v4';
 const CORE_ASSETS = [
   '/',
   '/manifest.json',

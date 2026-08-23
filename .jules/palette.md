@@ -1,0 +1,3 @@
+## 2026-08-22 - Responsive Zero-Scroll Results Layout
+**Learning:** For focused single-task viewports (like video downloader result cards), keeping decorative branding (hero banners) visible during active result mode consumes critical vertical space, forcing vertical scrolling on tablets and laptops. Grouping format selection controls into a 2-column grid on screens >= 480px and collapsing header hero in results mode dramatically reduces height so the full flow fits above the fold across all devices.
+**Action:** Always collapse non-essential decorative branding and align form controls side-by-side when switching into focused item result states.

@@ -42,6 +42,22 @@ export async function login(password) {
 
 let analyzeController = null;
 
+/// Explicitly invalidates the current token on the server and resets the
+/// client to the logged-out state. Idempotent: also safe to call when the
+/// server never knew the token.
+export async function logout() {
+  try {
+    await fetch('/api/logout', { method: 'POST', headers: authHeaders() });
+  } catch (_) {
+    // Network errors must not block the local logout
+  }
+  closeSSE();
+  cancelAnalyze();
+  resetApp();
+  auth.setAuth(null);
+  toasts.add('Abgemeldet.', 'info');
+}
+
 function authHeaders() {
   const token = get(auth).token;
   return token ? { 'Authorization': `Bearer ${token}` } : {};

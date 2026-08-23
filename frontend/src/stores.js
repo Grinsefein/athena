@@ -169,18 +169,44 @@ export function formatDuration(val) {
 // SSE Connection manager
 let eventSource = null;
 let sseRetries = 0;
+let sseRetryTimer = null;
+
 const MAX_SSE_RETRIES = 3;
+const SSE_BACKOFF_BASE_MS = 1000;
+const SSE_BACKOFF_MAX_MS = 8000;
 
 export function closeSSE() {
+  if (sseRetryTimer) {
+    clearTimeout(sseRetryTimer);
+    sseRetryTimer = null;
+  }
   if (eventSource) {
     eventSource.close();
     eventSource = null;
   }
 }
 
-export function connectSSE(id, authToken, opts = {}) {
-  closeSSE();
-  sseRetries = 0;
+/// Reconnect with exponential backoff (1s -> 2s -> 4s ... capped at 8s).
+///
+/// The native EventSource would retry immediately and hammer the server on
+/// flaky Wi-Fi; closing it and re-opening on a timer gives the network time
+/// to recover instead of burning all retries within milliseconds.
+function scheduleSSERetry(id, authToken, opts) {
+  const delay = Math.min(
+    SSE_BACKOFF_BASE_MS * 2 ** (sseRetries - 1),
+    SSE_BACKOFF_MAX_MS
+  );
+  if (eventSource) {
+    eventSource.close();
+    eventSource = null;
+  }
+  sseRetryTimer = setTimeout(() => {
+    sseRetryTimer = null;
+    openStream(id, authToken, opts);
+  }, delay);
+}
+
+function openStream(id, authToken, opts = {}) {
   const tokenParam = authToken ? `?token=${encodeURIComponent(authToken)}` : '';
   const es = new EventSource(`/api/progress/${id}${tokenParam}`);
   eventSource = es;
@@ -265,7 +291,16 @@ export function connectSSE(id, authToken, opts = {}) {
       return;
     }
     sseRetries += 1;
+    scheduleSSERetry(id, authToken, opts);
   };
+}
+
+/// Public entry point: binds the SSE stream to a download and resets the
+/// retry budget (used for fresh downloads and session re-attach).
+export function connectSSE(id, authToken, opts = {}) {
+  closeSSE();
+  sseRetries = 0;
+  openStream(id, authToken, opts);
 }
 
 // ---------------------------------------------------------------------------

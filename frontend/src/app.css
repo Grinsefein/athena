@@ -123,7 +123,7 @@ input:focus-visible, select:focus-visible {
     box-shadow: 0 1px 3px rgba(15, 23, 42, 0.08);
     transition: background-color 0.15s ease, color 0.15s ease, transform 0.1s ease;
 }
-.icon-btn:hover { background: var(--surface-2); color: var(--text); }
+@media (hover: hover) { .icon-btn:hover { background: var(--surface-2); color: var(--text); } }
 .icon-btn:active { transform: scale(0.94); }
 .icon-btn:disabled { opacity: 0.55; cursor: default; transform: none; }
 .icon-btn svg { width: 20px; height: 20px; }
@@ -350,13 +350,13 @@ input:focus-visible, select:focus-visible {
     cursor: pointer;
     transition: background-color 0.15s ease, transform 0.1s ease;
 }
-.go-btn:hover:not(:disabled) { background: var(--brand-700); }
+@media (hover: hover) { .go-btn:hover:not(:disabled) { background: var(--brand-700); } }
 .go-btn:active:not(:disabled) { transform: scale(0.94); }
 .go-btn:disabled { opacity: 0.45; cursor: default; }
 .go-btn svg { width: 20px; height: 20px; }
 @media (min-width: 640px) { .go-btn svg { width: 22px; height: 22px; } }
 .go-btn.cancel-mode { background: var(--danger-text); box-shadow: none; }
-.go-btn.cancel-mode:hover:not(:disabled) { filter: brightness(1.1); }
+@media (hover: hover) { .go-btn.cancel-mode:hover:not(:disabled) { filter: brightness(1.1); } }
 
 /* ---------- Spinner ---------- */
 .spin {
@@ -452,6 +452,11 @@ html.dark .media-blur { opacity: 0.18; }
     font-weight: 700;
     line-height: 1.35;
     overflow-wrap: anywhere;
+    /* Cap very long YouTube titles at two lines so the thumbnail row stays balanced */
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
 }
 .media-meta {
     margin: 0.2rem 0 0;
@@ -595,7 +600,7 @@ html.dark .segmented button[aria-pressed="true"] { color: var(--brand-400); }
     user-select: none;
     transition: background-color 0.15s ease, border-color 0.15s ease;
 }
-.check-row:hover { background: var(--surface-3); }
+@media (hover: hover) { .check-row:hover { background: var(--surface-3); } }
 .check-row input {
     width: 20px;
     height: 20px;
@@ -686,7 +691,7 @@ html.dark .lyrics-tabs button[aria-selected="true"] {
     cursor: pointer;
     transition: background-color 0.15s ease, transform 0.1s ease;
 }
-.lyrics-btn:hover { background: var(--surface-3); }
+@media (hover: hover) { .lyrics-btn:hover { background: var(--surface-3); } }
 .lyrics-btn:active { transform: scale(0.97); }
 .lyrics-btn svg { width: 15px; height: 15px; flex-shrink: 0; }
 .lyrics-hint {
@@ -734,7 +739,7 @@ html.dark .link-btn { color: var(--brand-400); }
     cursor: pointer;
     transition: background-color 0.15s ease, border-color 0.15s ease;
 }
-.playlist-item:hover { background: var(--surface-3); border-color: var(--border); }
+@media (hover: hover) { .playlist-item:hover { background: var(--surface-3); border-color: var(--border); } }
 .playlist-item input {
     margin-top: 0.1rem;
     width: 20px;
@@ -742,7 +747,17 @@ html.dark .link-btn { color: var(--brand-400); }
     accent-color: var(--brand-600);
     flex-shrink: 0;
 }
-.playlist-item span { font-size: 0.875rem; font-weight: 600; line-height: 1.35; user-select: none; }
+.playlist-item span {
+    font-size: 0.875rem;
+    font-weight: 600;
+    line-height: 1.35;
+    user-select: none;
+    overflow-wrap: anywhere;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
 .playlist-count { margin: 0.6rem 0 0; text-align: right; font-size: 0.75rem; font-weight: 600; color: var(--muted); }
 
 /* ---------- Download button ---------- */
@@ -762,7 +777,7 @@ html.dark .link-btn { color: var(--brand-400); }
     box-shadow: 0 14px 30px -10px var(--brand-glow);
     transition: background-color 0.15s ease, transform 0.1s ease, box-shadow 0.2s ease;
 }
-.dl-btn:hover:not(:disabled) { background: var(--brand-700); }
+@media (hover: hover) { .dl-btn:hover:not(:disabled) { background: var(--brand-700); } }
 .dl-btn:active:not(:disabled) { transform: scale(0.99); }
 .dl-btn:disabled { background: var(--surface-2); color: var(--faint); cursor: not-allowed; box-shadow: none; }
 .dl-progress {
@@ -809,7 +824,7 @@ html.dark .link-btn { color: var(--brand-400); }
     cursor: pointer;
     transition: filter 0.15s ease, transform 0.1s ease;
 }
-.btn-abort:hover:not(:disabled) { filter: brightness(0.97); }
+@media (hover: hover) { .btn-abort:hover:not(:disabled) { filter: brightness(0.97); } }
 .btn-abort:active:not(:disabled) { transform: scale(0.98); }
 .btn-abort:disabled { opacity: 0.6; cursor: wait; }
 .btn-abort svg { width: 16px; height: 16px; flex-shrink: 0; }
@@ -838,18 +853,20 @@ html.dark .link-btn { color: var(--brand-400); }
 }
 .btn-save, .btn-ghost { border: none; }
 .btn-save { background: var(--success); color: #fff; box-shadow: 0 12px 26px -10px rgba(5, 150, 105, 0.5); }
-.btn-save:hover { background: #047857; }
+@media (hover: hover) { .btn-save:hover { background: #047857; } }
 .btn-ghost { background: var(--surface-2); color: var(--text); border: 1px solid var(--border); }
-.btn-ghost:hover { background: var(--surface-3); }
+@media (hover: hover) { .btn-ghost:hover { background: var(--surface-3); } }
 .btn-save:active, .btn-ghost:active { transform: scale(0.98); }
 .btn-save svg, .btn-ghost svg { width: 18px; height: 18px; flex-shrink: 0; }
 
 /* ---------- Toasts ---------- */
 .toasts {
     position: fixed;
-    top: calc(var(--safe-top) + 0.75rem);
+    /* Below the fixed topbar (44px icons + 0.75rem offset) so toasts never
+       cover the home/theme buttons on phones. Symmetric side margins too. */
+    top: calc(var(--safe-top) + 3.75rem);
     left: 0.875rem;
-    right: 7rem;
+    right: 0.875rem;
     display: flex;
     flex-direction: column;
     gap: 0.6rem;
@@ -901,7 +918,7 @@ html.dark .link-btn { color: var(--brand-400); }
     place-items: center;
     border-radius: 8px;
 }
-.toast-close:hover { opacity: 1; }
+@media (hover: hover) { .toast-close:hover { opacity: 1; } }
 .toast-close svg { width: 14px; height: 14px; }
 
 /* ---------- Login modal ---------- */
@@ -967,7 +984,7 @@ html.dark .link-btn { color: var(--brand-400); }
     box-shadow: var(--shadow-pop);
     transition: background-color 0.15s ease, transform 0.1s ease;
 }
-.login-btn:hover:not(:disabled) { background: var(--brand-700); }
+@media (hover: hover) { .login-btn:hover:not(:disabled) { background: var(--brand-700); } }
 .login-btn:active:not(:disabled) { transform: scale(0.98); }
 .login-btn:disabled { opacity: 0.5; cursor: default; }
 .login-btn span { display: inline-flex; align-items: center; justify-content: center; gap: 0.5rem; }

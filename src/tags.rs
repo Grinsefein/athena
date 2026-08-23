@@ -47,12 +47,13 @@ pub fn embed_artwork(path: &Path, jpeg: &[u8]) -> Result<(), String> {
     save(&tagged, path)
 }
 
-/// Write plain lyrics into the file's lyrics tag (USLT/©lyr/LYRICS per format).
-pub fn embed_lyrics(path: &Path, plain: &str) -> Result<(), String> {
+/// Write lyrics into the file's lyrics tag (USLT/©lyr/LYRICS per format).
+/// Timestamped LRC text is preferred so players can show synced lyrics.
+pub fn embed_lyrics(path: &Path, text: &str) -> Result<(), String> {
     let mut tagged = open_tagged(path)?;
     {
         let tag = ensure_primary_tag(&mut tagged);
-        tag.insert_text(ItemKey::Lyrics, plain.to_string());
+        tag.insert_text(ItemKey::Lyrics, text.to_string());
     }
     save(&tagged, path)
 }

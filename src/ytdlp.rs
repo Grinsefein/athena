@@ -68,12 +68,11 @@ async fn enrich_audio(
     let duration = video_info.get("duration").and_then(|d| d.as_f64());
     match metadata::fetch_lyrics(&artist, &track, &album, duration).await {
         Some(lyrics) => {
-            let plain = lyrics
-                .plain
-                .clone()
-                .or_else(|| lyrics.synced.as_deref().map(metadata::strip_lrc_timestamps));
-            if let Some(p) = &plain {
-                if let Err(e) = tags::embed_lyrics(path, p) {
+            // Embed the timestamped (synced LRC) version when available so
+            // players can display time-synced lyrics; fall back to plain.
+            let embed_text = lyrics.synced.clone().or_else(|| lyrics.plain.clone());
+            if let Some(text) = embed_text {
+                if let Err(e) = tags::embed_lyrics(path, &text) {
                     warn!("Download {}: lyrics embed failed: {}", download_id, e);
                 }
             }

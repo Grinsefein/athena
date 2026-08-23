@@ -86,7 +86,7 @@
 <LoginModal />
 
 <main class="shell" class:results-mode={!!$videoInfo} class:focus-mode={isInputFocused}>
-  <div class="wrap">
+  <div class="wrap" class:wide={!!$videoInfo?.playlist_videos?.length}>
     <!-- Header -->
     <header class="hero">
       <div class="logo-badge" aria-hidden="true">
@@ -170,7 +170,7 @@
 
         <!-- Result Section -->
         {#if $videoInfo}
-          <div class="result reveal">
+          <div class="result reveal" class:has-playlist={!!$videoInfo.playlist_videos?.length}>
             <MediaCard />
             <div class="result-grid">
               <div class="result-col"><FormatSelector /></div>

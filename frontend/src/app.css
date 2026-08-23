@@ -182,7 +182,9 @@ input:focus-visible, select:focus-visible {
     .shell.results-mode .card { border-radius: var(--r-lg); }
     .shell.results-mode .card-body { padding: 0.75rem; }
     .shell.results-mode .result { margin-top: 0.75rem; gap: 0.7rem; }
+    .shell.results-mode .dl-flow { gap: 0.7rem; }
     .shell.results-mode .result-grid { gap: 0.7rem; }
+    .shell.results-mode .result-col { gap: 0.7rem; }
     .shell.results-mode .media { gap: 0.65rem; padding: 0.6rem; }
     .shell.results-mode .thumb { width: 76px; }
     .shell.results-mode .media-title { font-size: 0.85rem; }
@@ -229,17 +231,43 @@ input:focus-visible, select:focus-visible {
 /* Footer hidden while results are shown (all viewports) */
 .shell.results-mode .footer { display: none; }
 
-/* ---------- Results layout (desktop uses the horizontal space) ---------- */
+/* ---------- Results layout ---------- */
 @media (min-width: 640px) {
-    .shell.results-mode .wrap { max-width: 58rem; }
+    .shell.results-mode .wrap { max-width: 44rem; }
     .shell.results-mode .card-body { padding: 1.75rem 2rem; }
     .shell.results-mode .result { margin-top: 1.25rem; gap: 1.25rem; }
+    .shell.results-mode .dl-flow { gap: 1.25rem; }
 }
-@media (min-width: 900px) {
-    .result-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: clamp(1.25rem, 3vw, 2rem); align-items: start; }
-    .shell.results-mode .result-grid { gap: 1.5rem; }
-    .result-col { min-width: 0; display: flex; flex-direction: column; gap: clamp(1.25rem, 3vw, 2rem); }
-    .shell.results-mode .result-col { gap: 1.25rem; }
+
+/* Desktop with playlist: two-lane layout — action flow left, playlist right.
+   Without a playlist the card keeps its compact centered width. */
+@media (min-width: 1024px) {
+    .wrap.wide { max-width: 68rem; }
+    .thumb { width: 168px; }
+
+    .result.has-playlist {
+        display: grid;
+        grid-template-columns: minmax(0, 11fr) minmax(0, 9fr);
+        grid-template-areas:
+            "media   media"
+            "format  playlist"
+            "flow    playlist";
+        align-items: start;
+        gap: 1.5rem clamp(1.5rem, 3vw, 2.5rem);
+    }
+    .result.has-playlist > .media { grid-area: media; margin-top: 0; }
+    /* Promote the two columns into the card's own grid. */
+    .result.has-playlist > .result-grid { display: contents; }
+    .result-grid > .result-col:first-child {
+        grid-area: format;
+        display: flex;
+        flex-direction: column;
+        gap: 1.25rem;
+    }
+    .result-grid > .result-col:last-child { grid-area: playlist; }
+    .result.has-playlist > .dl-flow { grid-area: flow; min-width: 0; }
+
+    .result.has-playlist .playlist-list { max-height: min(26rem, 48vh); }
 }
 
 /* ---------- Card ---------- */
@@ -383,7 +411,8 @@ input:focus-visible, select:focus-visible {
 
 .result { margin-top: clamp(1.5rem, 4vw, 2.5rem); display: flex; flex-direction: column; gap: clamp(1.25rem, 3vw, 2rem); }
 .result-grid { display: flex; flex-direction: column; gap: clamp(1.25rem, 3vw, 2rem); }
-.result-col { min-width: 0; }
+.result-col { min-width: 0; display: flex; flex-direction: column; gap: clamp(1.1rem, 3vw, 1.4rem); }
+.dl-flow { display: flex; flex-direction: column; gap: 0.9rem; min-width: 0; }
 
 /* ---------- Media card ---------- */
 .media {
@@ -729,9 +758,12 @@ html.dark .link-btn { color: var(--brand-400); }
 .dl-progress {
     position: absolute;
     inset: 0;
+    width: 100%;
     background: rgba(255, 255, 255, 0.16);
     transform-origin: left center;
-    transition: width 0.3s ease-out;
+    transform: scaleX(0);
+    transition: transform 0.3s ease-out;
+    will-change: transform;
 }
 
 /* Soft shimmer sweep while a download is running (clipped by .dl-btn) */

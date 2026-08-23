@@ -26,9 +26,7 @@ pub static PASSWORD_HASH: Lazy<Option<String>> = Lazy::new(|| {
 });
 
 fn is_bcrypt_hash(value: &str) -> bool {
-    (value.starts_with("$2a$")
-        || value.starts_with("$2b$")
-        || value.starts_with("$2y$"))
+    (value.starts_with("$2a$") || value.starts_with("$2b$") || value.starts_with("$2y$"))
         && value.len() >= 59
 }
 
@@ -331,7 +329,10 @@ pub async fn cleanup_old_data(state: &AppState) {
     // below must never touch them.
     let referenced_paths: std::collections::HashSet<PathBuf> = {
         let downloads = state.active_downloads.lock().await;
-        downloads.values().filter_map(|i| i.file_path.clone()).collect()
+        downloads
+            .values()
+            .filter_map(|i| i.file_path.clone())
+            .collect()
     };
 
     // Cleanup old orphaned files (no owning entry anymore)
@@ -690,8 +691,14 @@ mod auth_cleanup_tests {
         cleanup_old_data(&state).await;
 
         let downloads = state.active_downloads.lock().await;
-        assert!(!downloads.contains_key("expired"), "idle completed download must expire");
-        assert!(downloads.contains_key("fresh"), "recently active download must survive");
+        assert!(
+            !downloads.contains_key("expired"),
+            "idle completed download must expire"
+        );
+        assert!(
+            downloads.contains_key("fresh"),
+            "recently active download must survive"
+        );
     }
 
     #[tokio::test]
@@ -750,7 +757,12 @@ mod metadata_cache_tests {
         let state = fresh_state();
         let payload = json!({ "id": "abc", "title": "Test" });
 
-        store_cached_meta(&state, "https://www.youtube.com/watch?v=abc".into(), payload.clone()).await;
+        store_cached_meta(
+            &state,
+            "https://www.youtube.com/watch?v=abc".into(),
+            payload.clone(),
+        )
+        .await;
 
         let got = get_cached_meta(&state, "https://www.youtube.com/watch?v=abc").await;
         assert_eq!(got, Some(payload));
@@ -796,7 +808,10 @@ mod metadata_cache_tests {
             );
             cache.insert(
                 "new".to_string(),
-                CachedMeta { json: json!({}), fetched_at: now_secs() },
+                CachedMeta {
+                    json: json!({}),
+                    fetched_at: now_secs(),
+                },
             );
         }
 
@@ -836,7 +851,10 @@ mod metadata_cache_tests {
         for i in 0..META_CACHE_MAX_ENTRIES {
             cache.insert(
                 format!("expired-{}", i),
-                CachedMeta { json: json!({}), fetched_at: now - ttl_secs - 1.0 - i as f64 },
+                CachedMeta {
+                    json: json!({}),
+                    fetched_at: now - ttl_secs - 1.0 - i as f64,
+                },
             );
         }
 
@@ -844,14 +862,29 @@ mod metadata_cache_tests {
         assert!(cache.is_empty(), "all expired entries should be purged");
 
         for i in 0..META_CACHE_MAX_ENTRIES {
-            cache.insert(format!("k{}", i), CachedMeta { json: json!({}), fetched_at: now });
+            cache.insert(
+                format!("k{}", i),
+                CachedMeta {
+                    json: json!({}),
+                    fetched_at: now,
+                },
+            );
         }
-        cache.insert("newcomer".to_string(), CachedMeta { json: json!({}), fetched_at: now + 1.0 });
+        cache.insert(
+            "newcomer".to_string(),
+            CachedMeta {
+                json: json!({}),
+                fetched_at: now + 1.0,
+            },
+        );
 
         evict_metadata_cache(&mut cache);
 
         assert_eq!(cache.len(), META_CACHE_MAX_ENTRIES);
-        assert!(cache.contains_key("newcomer"), "fresh entry must not be evicted");
+        assert!(
+            cache.contains_key("newcomer"),
+            "fresh entry must not be evicted"
+        );
     }
 }
 
@@ -872,7 +905,10 @@ mod password_verification_tests {
     fn test_verify_password_bcrypt_path() {
         // Cost 4 is the bcrypt minimum and keeps the test fast
         let hash = bcrypt::hash("correct horse battery staple", 4).unwrap();
-        assert!(verify_password_against(&hash, "correct horse battery staple"));
+        assert!(verify_password_against(
+            &hash,
+            "correct horse battery staple"
+        ));
         assert!(!verify_password_against(&hash, "wrong password"));
         assert!(!verify_password_against(&hash, ""));
     }

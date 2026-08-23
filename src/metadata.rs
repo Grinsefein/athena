@@ -179,7 +179,12 @@ pub async fn fetch_image(url: &str) -> Option<Vec<u8>> {
     fetch_image_bytes(url).await
 }
 
-async fn query_lrclib(artist: &str, track: &str, album: &str, duration: Option<f64>) -> Option<Value> {
+async fn query_lrclib(
+    artist: &str,
+    track: &str,
+    album: &str,
+    duration: Option<f64>,
+) -> Option<Value> {
     if track.is_empty() {
         return None;
     }
@@ -285,7 +290,10 @@ mod tests {
     #[test]
     fn test_strip_junk_removes_official_markers() {
         assert_eq!(strip_junk("Song Title (Official Video)"), "Song Title");
-        assert_eq!(strip_junk("Song Title [Official Music Video]"), "Song Title");
+        assert_eq!(
+            strip_junk("Song Title [Official Music Video]"),
+            "Song Title"
+        );
         assert_eq!(strip_junk("Song Title (Lyrics)"), "Song Title");
         assert_eq!(strip_junk("Song Title (HD)"), "Song Title");
     }

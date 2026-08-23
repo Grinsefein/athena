@@ -240,7 +240,15 @@ pub async fn download_task(
 
     info!("Download {} starting processing", download_id);
 
-    let result = execute_download(&state, &download_id, &url, &format_type, &quality, want_lyrics).await;
+    let result = execute_download(
+        &state,
+        &download_id,
+        &url,
+        &format_type,
+        &quality,
+        want_lyrics,
+    )
+    .await;
 
     if let Err(e) = result {
         error!("Download {} failed: {}", download_id, e);
@@ -283,7 +291,9 @@ pub async fn execute_download(
         let info_output = match tokio::time::timeout(Duration::from_secs(90), info_output).await {
             Ok(Ok(out)) => out,
             Ok(Err(e)) => return Err(format!("Failed to get video info: {}", e)),
-            Err(_) => return Err("Zeitüberschreitung beim Abrufen der Video-Informationen".to_string()),
+            Err(_) => {
+                return Err("Zeitüberschreitung beim Abrufen der Video-Informationen".to_string())
+            }
         };
 
         if !info_output.status.success() {
@@ -350,7 +360,8 @@ pub async fn execute_download(
         args.push("--convert-thumbnails");
         args.push("jpg");
         if quality == "best" {
-            format_arg = "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best".to_string();
+            format_arg =
+                "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best".to_string();
         } else {
             let parts: Vec<&str> = quality.split('-').collect();
             if parts.len() == 2 {
@@ -361,7 +372,8 @@ pub async fn execute_download(
                     height_str, height_str, ext, height_str
                 );
             } else {
-                format_arg = "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best".to_string();
+                format_arg =
+                    "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best".to_string();
             }
         }
         // Merged video+audio streams must land in an mp4 container; without
@@ -520,12 +532,12 @@ pub async fn execute_download(
         .to_string();
 
     if format_type == "audio" {
-        let lyrics =
-            enrich_audio(state, download_id, &final_path, &video_info, want_lyrics).await;
+        let lyrics = enrich_audio(state, download_id, &final_path, &video_info, want_lyrics).await;
         if let Some(l) = lyrics {
-            let plain = l.plain.clone().or_else(|| {
-                l.synced.as_deref().map(metadata::strip_lrc_timestamps)
-            });
+            let plain = l
+                .plain
+                .clone()
+                .or_else(|| l.synced.as_deref().map(metadata::strip_lrc_timestamps));
             let mut downloads = state.active_downloads.lock().await;
             if let Some(info) = downloads.get_mut(download_id) {
                 info.lyrics_plain = plain;
@@ -667,9 +679,8 @@ pub async fn execute_playlist_download(
                 continue;
             }
 
-            let parsed: serde_json::Value =
-                serde_json::from_slice(&info_output.stdout)
-                    .map_err(|e| format!("Failed to parse video info: {}", e))?;
+            let parsed: serde_json::Value = serde_json::from_slice(&info_output.stdout)
+                .map_err(|e| format!("Failed to parse video info: {}", e))?;
             store_cached_meta(state, url.to_string(), parsed.clone()).await;
             parsed
         };
@@ -708,7 +719,8 @@ pub async fn execute_playlist_download(
             args.push("--convert-thumbnails");
             args.push("jpg");
             if quality == "best" {
-                format_arg = "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best".to_string();
+                format_arg =
+                    "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best".to_string();
             } else {
                 let parts: Vec<&str> = quality.split('-').collect();
                 if parts.len() == 2 {
@@ -717,7 +729,8 @@ pub async fn execute_playlist_download(
                     let ext = parts[1];
                     format_arg = format!("bestvideo[height<={}][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<={}][ext={}]+bestaudio/bestvideo[height<={}]+bestaudio/best", height_str, height_str, ext, height_str);
                 } else {
-                    format_arg = "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best".to_string();
+                    format_arg = "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best"
+                        .to_string();
                 }
             }
             args.push("--merge-output-format");
@@ -824,8 +837,7 @@ pub async fn execute_playlist_download(
                         && !name.ends_with(".part")
                         && !name.ends_with(".ytdl")
                     {
-                        let file_ext =
-                            path.extension().and_then(|e| e.to_str()).unwrap_or(ext);
+                        let file_ext = path.extension().and_then(|e| e.to_str()).unwrap_or(ext);
                         let sanitized_title = sanitize_filename(title);
                         let target_path =
                             temp_dir.join(format!("{}.{}", sanitized_title, file_ext));
@@ -848,8 +860,8 @@ pub async fn execute_playlist_download(
                                     .or_else(|| l.plain.clone())
                                     .unwrap_or_default();
                                 if !text.is_empty() {
-                                    let lrc_path = temp_dir
-                                        .join(format!("{}.lrc", sanitized_title));
+                                    let lrc_path =
+                                        temp_dir.join(format!("{}.lrc", sanitized_title));
                                     if fs::write(&lrc_path, &text).await.is_ok() {
                                         lyric_files.push(lrc_path);
                                     }
@@ -873,7 +885,10 @@ pub async fn execute_playlist_download(
         if is_aborted {
             drop(downloads);
             let _ = fs::remove_dir_all(&temp_dir).await;
-            info!("Playlist download {} aborted, discarding partial results", download_id);
+            info!(
+                "Playlist download {} aborted, discarding partial results",
+                download_id
+            );
             return Ok(());
         }
     }

@@ -7,8 +7,8 @@
 use athena::handlers;
 use athena::models::{ApiResponse, ConfigResponse, DownloadRequest, LoginRequest};
 use athena::state::{
-    now_secs, AppState, SharedState, TOKEN_MAX_AGE_SECS, MAX_ANALYZE_PER_WINDOW,
-    MAX_DOWNLOADS_PER_WINDOW,
+    now_secs, AppState, SharedState, MAX_ANALYZE_PER_WINDOW, MAX_DOWNLOADS_PER_WINDOW,
+    TOKEN_MAX_AGE_SECS,
 };
 use axum::body::{Body, HttpBody};
 use axum::extract::{ConnectInfo, Path, Query, Request, State};
@@ -57,7 +57,10 @@ async fn register_token(state: &SharedState, token: &str) {
 async fn root_serves_embedded_frontend() {
     let html = handlers::root().await.0;
 
-    assert!(html.contains("<title>KlauTube</title>"), "title tag present");
+    assert!(
+        html.contains("<title>KlauTube</title>"),
+        "title tag present"
+    );
     assert!(html.contains("id=\"app\""), "Svelte app mount container");
     assert!(html.contains("results-mode"), "mobile results mode styling");
     assert!(html.contains("qualitySelect"), "quality select control");
@@ -68,7 +71,10 @@ async fn root_serves_embedded_frontend() {
 async fn frontend_redesign_regressions_are_absent() {
     let html = handlers::root().await.0;
 
-    assert!(!html.contains("quality-grid"), "grid was replaced by select");
+    assert!(
+        !html.contains("quality-grid"),
+        "grid was replaced by select"
+    );
     assert!(!html.contains("q-card"), "grid cards were removed");
     assert!(!html.contains("best-stamp"), "old stamp marker was removed");
     assert!(!html.contains("expand-btn"), "expander was removed");
@@ -83,10 +89,7 @@ async fn manifest_served_as_json_with_cache_header() {
     let response = handlers::manifest_handler().await.into_response();
 
     assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(
-        response.headers()[header::CONTENT_TYPE],
-        "application/json"
-    );
+    assert_eq!(response.headers()[header::CONTENT_TYPE], "application/json");
     assert!(response.headers().contains_key(header::CACHE_CONTROL));
 }
 
@@ -194,10 +197,7 @@ async fn share_redirects_with_url_param() {
 async fn share_extracts_first_url_from_text_in_both_encodings() {
     for request in [
         share_request_multipart(&[("text", "Check this https://example.com/watch?v=abc out")]),
-        share_request_urlencoded(&[(
-            "text",
-            "Check this https://example.com/watch?v=abc out",
-        )]),
+        share_request_urlencoded(&[("text", "Check this https://example.com/watch?v=abc out")]),
     ] {
         let response = handlers::handle_share(request).await.into_response();
 
@@ -258,7 +258,11 @@ async fn analyze_rejects_invalid_url_before_subprocess() {
 
         match result {
             Err(athena::AppError::InvalidUrl { .. }) => {}
-            other => panic!("expected InvalidUrl for {:?}, got {:?}", bad, other.map(|_| ())),
+            other => panic!(
+                "expected InvalidUrl for {:?}, got {:?}",
+                bad,
+                other.map(|_| ())
+            ),
         }
     }
 
@@ -328,9 +332,13 @@ async fn analyze_is_rate_limited_per_ip() {
 
     // A different client IP still has its own budget.
     let other_ip = ConnectInfo(SocketAddr::from(([192, 0, 2, 7], 50_000)));
-    let result =
-        handlers::analyze_video(State(state), other_ip, HeaderMap::new(), download_request("ftp://example.com/v"))
-            .await;
+    let result = handlers::analyze_video(
+        State(state),
+        other_ip,
+        HeaderMap::new(),
+        download_request("ftp://example.com/v"),
+    )
+    .await;
     assert!(
         matches!(result, Err(athena::AppError::InvalidUrl { .. })),
         "other IPs keep their own budget"
@@ -470,12 +478,10 @@ async fn download_file_not_ready_is_404_for_queued_status() {
     match result {
         Err(athena::AppError::DownloadNotReady { status }) => {
             assert_eq!(status, "processing");
-            let response =
-                athena::AppError::DownloadNotReady { status }.into_response();
+            let response = athena::AppError::DownloadNotReady { status }.into_response();
             assert_eq!(response.status(), StatusCode::NOT_FOUND);
         }
         other => panic!("expected DownloadNotReady, got {:?}", other.map(|_| ())),
-
     }
 }
 
@@ -490,7 +496,11 @@ async fn read_body(response: Response) -> Vec<u8> {
 
 /// Inserts a completed download entry pointing at a freshly written temp file
 /// so that download_file can actually serve bytes.
-async fn seed_completed_download(state: &SharedState, id: &str, payload: &[u8]) -> std::path::PathBuf {
+async fn seed_completed_download(
+    state: &SharedState,
+    id: &str,
+    payload: &[u8],
+) -> std::path::PathBuf {
     use athena::state::DownloadInfo;
 
     // Parallel tests may finish within the same second -> sequence number
@@ -498,11 +508,7 @@ async fn seed_completed_download(state: &SharedState, id: &str, payload: &[u8]) 
     static DIR_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let seq = DIR_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
-    let dir = std::env::temp_dir().join(format!(
-        "athena-test-{}-{}",
-        std::process::id(),
-        seq
-    ));
+    let dir = std::env::temp_dir().join(format!("athena-test-{}-{}", std::process::id(), seq));
     tokio::fs::create_dir_all(&dir).await.unwrap();
     let file_path = dir.join(format!("{id}.bin"));
     tokio::fs::write(&file_path, payload).await.unwrap();
@@ -550,7 +556,9 @@ async fn download_file_serves_full_file_with_range_support_headers() {
     assert_eq!(response.headers()[header::CONTENT_LENGTH], "16");
     assert_eq!(read_body(response).await, payload.to_vec());
 
-    tokio::fs::remove_dir_all(file_path.parent().unwrap()).await.unwrap();
+    tokio::fs::remove_dir_all(file_path.parent().unwrap())
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
@@ -612,7 +620,9 @@ async fn download_file_answers_range_requests_with_partial_content() {
     assert_eq!(response.headers()[header::CONTENT_RANGE], "bytes 12-15/16");
     assert_eq!(read_body(response).await, b"cdef".to_vec());
 
-    tokio::fs::remove_dir_all(file_path.parent().unwrap()).await.unwrap();
+    tokio::fs::remove_dir_all(file_path.parent().unwrap())
+        .await
+        .unwrap();
 }
 
 #[tokio::test]
@@ -637,7 +647,9 @@ async fn download_file_rejects_unsatisfiable_range_with_416() {
     assert_eq!(response.status(), StatusCode::RANGE_NOT_SATISFIABLE);
     assert_eq!(response.headers()[header::CONTENT_RANGE], "bytes */16");
 
-    tokio::fs::remove_dir_all(file_path.parent().unwrap()).await.unwrap();
+    tokio::fs::remove_dir_all(file_path.parent().unwrap())
+        .await
+        .unwrap();
 }
 
 // ============================================================================
@@ -667,26 +679,11 @@ async fn is_authenticated_expiry_boundary_respected() {
     }
 
     if auth_enabled() {
-        assert!(!handlers::is_authenticated(
-            &bearer_headers("expired-token"),
-            None,
-            &state
-        )
-        .await);
-        assert!(handlers::is_authenticated(
-            &bearer_headers("fresh-token"),
-            None,
-            &state
-        )
-        .await);
+        assert!(!handlers::is_authenticated(&bearer_headers("expired-token"), None, &state).await);
+        assert!(handlers::is_authenticated(&bearer_headers("fresh-token"), None, &state).await);
     } else {
         // Without auth enabled everything is allowed by design.
-        assert!(handlers::is_authenticated(
-            &bearer_headers("expired-token"),
-            None,
-            &state
-        )
-        .await);
+        assert!(handlers::is_authenticated(&bearer_headers("expired-token"), None, &state).await);
     }
 }
 
@@ -792,11 +789,18 @@ async fn logout_invalidates_the_presented_token() {
     let state = fresh_state();
     register_token(&state, TOKEN).await;
 
-    let Json(ApiResponse { success, data, .. }) =
-        handlers::logout(State(state.clone()), bearer_headers(TOKEN), Query(HashMap::new())).await;
+    let Json(ApiResponse { success, data, .. }) = handlers::logout(
+        State(state.clone()),
+        bearer_headers(TOKEN),
+        Query(HashMap::new()),
+    )
+    .await;
 
     assert!(success);
-    assert_eq!(data.expect("payload")["logged_out"], serde_json::json!(true));
+    assert_eq!(
+        data.expect("payload")["logged_out"],
+        serde_json::json!(true)
+    );
     assert!(
         state.auth_tokens.lock().await.is_empty(),
         "token must be removed from the server-side store"
@@ -808,9 +812,16 @@ async fn logout_is_idempotent_for_unknown_or_missing_tokens() {
     let state = fresh_state();
 
     // No token at all
-    let Json(ApiResponse { data, .. }) =
-        handlers::logout(State(state.clone()), HeaderMap::new(), Query(HashMap::new())).await;
-    assert_eq!(data.expect("payload")["logged_out"], serde_json::json!(false));
+    let Json(ApiResponse { data, .. }) = handlers::logout(
+        State(state.clone()),
+        HeaderMap::new(),
+        Query(HashMap::new()),
+    )
+    .await;
+    assert_eq!(
+        data.expect("payload")["logged_out"],
+        serde_json::json!(false)
+    );
 
     // Unknown bearer token
     let Json(ApiResponse { data, .. }) = handlers::logout(
@@ -819,12 +830,23 @@ async fn logout_is_idempotent_for_unknown_or_missing_tokens() {
         Query(HashMap::new()),
     )
     .await;
-    assert_eq!(data.expect("payload")["logged_out"], serde_json::json!(false));
+    assert_eq!(
+        data.expect("payload")["logged_out"],
+        serde_json::json!(false)
+    );
 
     // A second logout with an already-invalidated token stays harmless
     register_token(&state, TOKEN).await;
-    let _ = handlers::logout(State(state.clone()), bearer_headers(TOKEN), Query(HashMap::new())).await;
+    let _ = handlers::logout(
+        State(state.clone()),
+        bearer_headers(TOKEN),
+        Query(HashMap::new()),
+    )
+    .await;
     let Json(ApiResponse { data, .. }) =
         handlers::logout(State(state), bearer_headers(TOKEN), Query(HashMap::new())).await;
-    assert_eq!(data.expect("payload")["logged_out"], serde_json::json!(false));
+    assert_eq!(
+        data.expect("payload")["logged_out"],
+        serde_json::json!(false)
+    );
 }

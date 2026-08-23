@@ -1,12 +1,8 @@
 use axum::{
     body::Body,
-    extract::{
-        ConnectInfo, FromRequest, Multipart, Path, Query, Request, State,
-    },
+    extract::{ConnectInfo, FromRequest, Multipart, Path, Query, Request, State},
     http::{
-        header::{
-            self, CACHE_CONTROL, CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE,
-        },
+        header::{self, CACHE_CONTROL, CONTENT_LENGTH, CONTENT_RANGE, CONTENT_TYPE},
         StatusCode,
     },
     response::{sse::Event, Html, IntoResponse, Json, Redirect, Response, Sse},
@@ -14,7 +10,11 @@ use axum::{
 use futures::stream::Stream;
 use once_cell::sync::Lazy;
 use regex::Regex;
-use std::{collections::HashMap, io::SeekFrom, net::{IpAddr, Ipv4Addr}};
+use std::{
+    collections::HashMap,
+    io::SeekFrom,
+    net::{IpAddr, Ipv4Addr},
+};
 use tokio::{
     fs,
     io::{AsyncReadExt, AsyncSeekExt},
@@ -31,9 +31,9 @@ use crate::models::{
 };
 use crate::state::{
     consume_rate_limit, delete_download_artifacts, get_cached_meta, now_secs, store_cached_meta,
-    touch_download, verify_password, ANALYZE_SEMAPHORE, AppState, DownloadInfo, SharedState,
-    PASSWORD_HASH, TOKEN_MAX_AGE_SECS, API_WINDOW_SECS, DOWNLOAD_DIR, MAX_ANALYZE_PER_WINDOW,
-    MAX_DOWNLOADS_PER_WINDOW,
+    touch_download, verify_password, AppState, DownloadInfo, SharedState, ANALYZE_SEMAPHORE,
+    API_WINDOW_SECS, DOWNLOAD_DIR, MAX_ANALYZE_PER_WINDOW, MAX_DOWNLOADS_PER_WINDOW, PASSWORD_HASH,
+    TOKEN_MAX_AGE_SECS,
 };
 use crate::ytdlp::{
     download_task, get_audio_multiplier, map_audio_format_name, playlist_download_task,
@@ -129,7 +129,7 @@ pub(crate) fn is_public_ip(ip: IpAddr) -> bool {
             !(v6.is_loopback()
                 || v6.is_unspecified()
                 || (seg[0] & 0xfe00) == 0xfc00   // fc00::/7 unique local
-                || (seg[0] & 0xffc0) == 0xfe80)  // fe80::/10 link-local
+                || (seg[0] & 0xffc0) == 0xfe80) // fe80::/10 link-local
         }
     }
 }
@@ -163,14 +163,18 @@ fn is_forbidden_hostname(host_lower: &str) -> bool {
 
 async fn validate_url(url: &str) -> AppResult<()> {
     if !((url.starts_with("http://") || url.starts_with("https://")) && url.len() <= 2048) {
-        return Err(invalid_url("Nur vollständige http(s)-URLs werden unterstützt"));
+        return Err(invalid_url(
+            "Nur vollständige http(s)-URLs werden unterstützt",
+        ));
     }
 
     let parsed = url::Url::parse(url)
         .map_err(|_| invalid_url("Nur vollständige http(s)-URLs werden unterstützt"))?;
 
     if !parsed.username().is_empty() || parsed.password().is_some() {
-        return Err(invalid_url("URLs mit Zugangsdaten werden nicht unterstützt"));
+        return Err(invalid_url(
+            "URLs mit Zugangsdaten werden nicht unterstützt",
+        ));
     }
 
     if *UNSAFE_ALLOW_PRIVATE_TARGETS {
@@ -233,8 +237,13 @@ async fn enforce_api_rate_limit(
         _ => unreachable!("unknown rate-limit endpoint"),
     };
 
-    if consume_rate_limit(&state.api_rate_limits, &format!("{endpoint}:{ip}"), max, API_WINDOW_SECS)
-        .await
+    if consume_rate_limit(
+        &state.api_rate_limits,
+        &format!("{endpoint}:{ip}"),
+        max,
+        API_WINDOW_SECS,
+    )
+    .await
     {
         Ok(())
     } else {
@@ -309,7 +318,11 @@ pub fn canonicalize_url(raw: &str) -> String {
             None => trimmed.to_string(),
         },
         p if p.starts_with("/shorts/") => {
-            let id = p.trim_start_matches("/shorts/").split('/').next().unwrap_or("");
+            let id = p
+                .trim_start_matches("/shorts/")
+                .split('/')
+                .next()
+                .unwrap_or("");
             if id.is_empty() {
                 trimmed.to_string()
             } else {
@@ -421,9 +434,7 @@ pub async fn handle_share(request: axum::extract::Request) -> Redirect {
     }
 }
 
-async fn extract_share_fields_multipart(
-    request: Request,
-) -> (Option<String>, Option<String>) {
+async fn extract_share_fields_multipart(request: Request) -> (Option<String>, Option<String>) {
     let mut multipart = match Multipart::from_request(request, &()).await {
         Ok(m) => m,
         Err(_) => return (None, None),
@@ -446,9 +457,7 @@ async fn extract_share_fields_multipart(
     (url, text)
 }
 
-async fn extract_share_fields_urlencoded(
-    request: Request,
-) -> (Option<String>, Option<String>) {
+async fn extract_share_fields_urlencoded(request: Request) -> (Option<String>, Option<String>) {
     const MAX_FORM_BYTES: usize = 64 * 1024;
     let bytes = match axum::body::to_bytes(request.into_body(), MAX_FORM_BYTES).await {
         Ok(b) => b,
@@ -662,23 +671,14 @@ fn build_format_presets(info: &serde_json::Value) -> Vec<FormatInfo> {
                     match audio_presets.get_mut(&key) {
                         Some(entry) => {
                             if perceived_score > entry.3 {
-                                *entry = (
-                                    format_id.to_string(),
-                                    mapped_format,
-                                    abr,
-                                    perceived_score,
-                                );
+                                *entry =
+                                    (format_id.to_string(), mapped_format, abr, perceived_score);
                             }
                         }
                         None => {
                             audio_presets.insert(
                                 key,
-                                (
-                                    format_id.to_string(),
-                                    mapped_format,
-                                    abr,
-                                    perceived_score,
-                                ),
+                                (format_id.to_string(), mapped_format, abr, perceived_score),
                             );
                         }
                     }
@@ -839,11 +839,12 @@ pub async fn analyze_video(
         }));
     }
 
-    let _permit = ANALYZE_SEMAPHORE.acquire().await.map_err(|_| {
-        AppError::Internal {
+    let _permit = ANALYZE_SEMAPHORE
+        .acquire()
+        .await
+        .map_err(|_| AppError::Internal {
             message: "Analyze-Semaphore wurde geschlossen".to_string(),
-        }
-    })?;
+        })?;
 
     let flat_output = tokio::time::timeout(
         Duration::from_secs(45),
@@ -1091,7 +1092,10 @@ pub async fn start_download(
     }
 
     let download_id = Uuid::new_v4().to_string()[..8].to_string();
-    info!("Starting download {} for URL: {}", download_id, canonical_url);
+    info!(
+        "Starting download {} for URL: {}",
+        download_id, canonical_url
+    );
 
     {
         let mut downloads = state.active_downloads.lock().await;
@@ -1234,7 +1238,10 @@ pub async fn abort_download(
             }
         }
     }
-    info!("Aborting download {}: killed {} process(es)", download_id, killed);
+    info!(
+        "Aborting download {}: killed {} process(es)",
+        download_id, killed
+    );
 
     // 2. Mark as aborted so the SSE stream notifies clients and the task's own
     //    error handling does not overwrite the status afterwards.
@@ -1652,10 +1659,7 @@ mod tests {
             "javascript:alert(1)",
             "data:text/html,x",
         ] {
-            assert!(
-                validate_url(url).await.is_err(),
-                "{url} must be rejected"
-            );
+            assert!(validate_url(url).await.is_err(), "{url} must be rejected");
         }
     }
 
@@ -1704,9 +1708,9 @@ mod tests {
             "http://[fe80::1]/",
             "http://[fc00::1]/",
             "http://[fd12:3456::1]/",
-            "http://[::ffff:192.168.1.1]/",  // IPv4-mapped private
-            "http://[::ffff:127.0.0.1]/",    // IPv4-mapped loopback
-            "http://[64:ff9b::c0a8:102]/",   // NAT64-mapped 192.168.1.2
+            "http://[::ffff:192.168.1.1]/", // IPv4-mapped private
+            "http://[::ffff:127.0.0.1]/",   // IPv4-mapped loopback
+            "http://[64:ff9b::c0a8:102]/",  // NAT64-mapped 192.168.1.2
         ] {
             assert!(
                 validate_url(host).await.is_err(),
@@ -1738,7 +1742,9 @@ mod tests {
         assert!(validate_url("http://user:pass@93.184.216.34/")
             .await
             .is_err());
-        assert!(validate_url("http://admin@192.168.0.1/admin").await.is_err());
+        assert!(validate_url("http://admin@192.168.0.1/admin")
+            .await
+            .is_err());
     }
 
     #[tokio::test]
@@ -1787,16 +1793,25 @@ mod tests {
     fn test_range_simple_partial_requests() {
         assert_eq!(
             parse_range_header(Some("bytes=0-99"), 1000),
-            ParsedRange::Partial { start: 0, length: 100 }
+            ParsedRange::Partial {
+                start: 0,
+                length: 100
+            }
         );
         assert_eq!(
             parse_range_header(Some("bytes=100-"), 1000),
-            ParsedRange::Partial { start: 100, length: 900 }
+            ParsedRange::Partial {
+                start: 100,
+                length: 900
+            }
         );
         // end beyond file size gets clamped
         assert_eq!(
             parse_range_header(Some("bytes=900-999999"), 1000),
-            ParsedRange::Partial { start: 900, length: 100 }
+            ParsedRange::Partial {
+                start: 900,
+                length: 100
+            }
         );
     }
 
@@ -1804,12 +1819,18 @@ mod tests {
     fn test_range_suffix_requests() {
         assert_eq!(
             parse_range_header(Some("bytes=-500"), 1000),
-            ParsedRange::Partial { start: 500, length: 500 }
+            ParsedRange::Partial {
+                start: 500,
+                length: 500
+            }
         );
         // suffix longer than the file serves everything
         assert_eq!(
             parse_range_header(Some("bytes=-5000"), 1000),
-            ParsedRange::Partial { start: 0, length: 1000 }
+            ParsedRange::Partial {
+                start: 0,
+                length: 1000
+            }
         );
     }
 
@@ -2124,8 +2145,14 @@ mod canonicalize_url_tests {
 
     #[test]
     fn test_non_youtube_urls_pass_through() {
-        assert_eq!(canonicalize_url("https://vimeo.com/12345"), "https://vimeo.com/12345");
-        assert_eq!(canonicalize_url("https://youtu.be.fake/x?y=z"), "https://youtu.be.fake/x?y=z");
+        assert_eq!(
+            canonicalize_url("https://vimeo.com/12345"),
+            "https://vimeo.com/12345"
+        );
+        assert_eq!(
+            canonicalize_url("https://youtu.be.fake/x?y=z"),
+            "https://youtu.be.fake/x?y=z"
+        );
     }
 
     #[test]
@@ -2144,10 +2171,7 @@ mod canonicalize_url_tests {
             canonicalize_url("https://www.youtube.com/playlist?si=no_list"),
             "https://www.youtube.com/playlist?si=no_list"
         );
-        assert_eq!(
-            canonicalize_url("https://youtu.be/"),
-            "https://youtu.be/"
-        );
+        assert_eq!(canonicalize_url("https://youtu.be/"), "https://youtu.be/");
     }
 
     #[test]
@@ -2243,7 +2267,10 @@ mod format_preset_tests {
             audio.len(),
             1,
             "identical Opus streams must collapse into one preset, got: {:?}",
-            audio.iter().map(|f| (&f.quality, &f.label)).collect::<Vec<_>>()
+            audio
+                .iter()
+                .map(|f| (&f.quality, &f.label))
+                .collect::<Vec<_>>()
         );
         assert_eq!(audio[0].format, "opus");
         assert!(audio[0].label.contains("150"), "label: {}", audio[0].label);
@@ -2304,15 +2331,24 @@ mod format_preset_tests {
 
     #[test]
     fn test_tbr_fallback_used_when_abr_missing() {
-        let info = info_with_formats(vec![
-            audio_stream("999", "opus", "webm", None, Some(96.0), None),
-        ]);
+        let info = info_with_formats(vec![audio_stream(
+            "999",
+            "opus",
+            "webm",
+            None,
+            Some(96.0),
+            None,
+        )]);
 
         let presets = build_format_presets(&info);
         let audio = audio_presets(&presets);
 
         assert_eq!(audio.len(), 1);
-        assert!(audio[0].label.contains("~96 kbps"), "label: {}", audio[0].label);
+        assert!(
+            audio[0].label.contains("~96 kbps"),
+            "label: {}",
+            audio[0].label
+        );
     }
 
     #[test]
@@ -2366,7 +2402,13 @@ mod format_preset_tests {
         assert_eq!(presets[audio_best_idx].label, "Beste Qualität (MP3)");
         assert_eq!(presets[audio_best_idx].format, "mp3");
         // Audio best comes after all video presets.
-        assert!(audio_best_idx > presets.iter().position(|f| f.media_type == "video" && f.quality != "best").unwrap());
+        assert!(
+            audio_best_idx
+                > presets
+                    .iter()
+                    .position(|f| f.media_type == "video" && f.quality != "best")
+                    .unwrap()
+        );
     }
 
     #[test]
@@ -2405,10 +2447,7 @@ mod format_preset_tests {
         assert_eq!(format_filesize(-1.0), None);
         assert_eq!(format_filesize(0.0), None);
         assert_eq!(format_filesize(512.0), Some("0.5 KB".to_string()));
-        assert_eq!(
-            format_filesize(1_572_864.0),
-            Some("1.5 MB".to_string())
-        );
+        assert_eq!(format_filesize(1_572_864.0), Some("1.5 MB".to_string()));
         assert_eq!(
             format_filesize(1024.0 * 1024.0 * 1024.0 * 2.0),
             Some("2.00 GB".to_string())

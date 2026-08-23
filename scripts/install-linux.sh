@@ -7,7 +7,7 @@ echo "=== Installing Athena Pi Host Dependencies ==="
 if [ -f /etc/debian_version ] || [ -f /etc/lsb-release ]; then
     echo "Detected Debian/Ubuntu-based system. Installing packages via apt..."
     sudo apt-get update
-    sudo apt-get install -y ffmpeg python3 python3-pip curl pkg-config libssl-dev build-essential nodejs npm
+    sudo apt-get install -y ffmpeg python3 python3-pip curl pkg-config libssl-dev build-essential nodejs npm python3-mutagen
 else
     echo "Non-Debian/Ubuntu system. Please ensure you have ffmpeg, python3, pip, pkg-config, nodejs and npm installed manually."
 fi

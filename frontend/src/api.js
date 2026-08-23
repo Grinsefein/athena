@@ -41,6 +41,53 @@ export async function login(password) {
 
 let analyzeController = null;
 
+function authHeaders() {
+  const token = get(auth).token;
+  return token ? { 'Authorization': `Bearer ${token}` } : {};
+}
+
+// ---------------------------------------------------------------------------
+// Session keep-alive: while the tab is open AND the user shows activity, a
+// periodic heartbeat tells the server the downloaded file is still wanted.
+// An idle tab counts as AFK: the heartbeat pauses so the server-side
+// retention timer expires and the file gets cleaned up.
+// ---------------------------------------------------------------------------
+let heartbeatTimer = null;
+let lastInteraction = Date.now();
+
+const HEARTBEAT_INTERVAL_MS = 30000;
+const ACTIVITY_IDLE_PAUSE_MS = 5 * 60 * 1000;
+
+export function initActivityTracking() {
+  if (typeof window === 'undefined') return;
+  const mark = () => { lastInteraction = Date.now(); };
+  ['pointerdown', 'keydown', 'touchstart'].forEach(ev =>
+    window.addEventListener(ev, mark, { passive: true })
+  );
+}
+
+export function ensureHeartbeat() {
+  if (heartbeatTimer || typeof window === 'undefined') return;
+  heartbeatTimer = setInterval(() => {
+    const id = get(downloadId);
+    if (!id) return;
+    if (Date.now() - lastInteraction > ACTIVITY_IDLE_PAUSE_MS) return;
+    fetch(`/api/heartbeat/${encodeURIComponent(id)}`, {
+      method: 'POST',
+      headers: authHeaders()
+    }).catch(() => {});
+  }, HEARTBEAT_INTERVAL_MS);
+}
+
+// Explicitly discard a finished download on the server ("new video = new session").
+function releaseDownload(id) {
+  if (!id) return Promise.resolve();
+  return fetch(`/api/release/${encodeURIComponent(id)}`, {
+    method: 'POST',
+    headers: authHeaders()
+  }).catch(() => {});
+}
+
 export async function analyzeVideo(url) {
   const targetUrl = url ? cleanUrl(String(url).trim()) : '';
   if (!isValidUrl(targetUrl)) return;
@@ -48,6 +95,13 @@ export async function analyzeVideo(url) {
   if (analyzeController) analyzeController.abort();
   analyzeController = new AbortController();
   const signal = analyzeController.signal;
+
+  // Starting a new video ends the previous session: drop its finished file.
+  if (get(downloadId) && get(completed)) {
+    releaseDownload(get(downloadId));
+    downloadId.set(null);
+    downloadUrl.set(null);
+  }
 
   loading.set(true);
   errorMsg.set(null);
@@ -158,6 +212,7 @@ export async function startDownload() {
     downloadId.set(id);
     queued.set(data.data.status === 'queued');
     connectSSE(id, authState.token);
+    ensureHeartbeat();
     persistSession();
   } catch (e) {
     downloading.set(false);
@@ -227,6 +282,12 @@ export async function checkYtdlpUpdate() {
 
 export function resetApp() {
   cancelAnalyze();
+
+  // "Neues Video" ends the session: release the finished file on the server.
+  if (get(downloadId) && get(completed)) {
+    releaseDownload(get(downloadId));
+  }
+
   clearSession();
   urlInput.set('');
   videoInfo.set(null);

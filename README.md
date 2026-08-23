@@ -112,6 +112,7 @@ Environment variables can be configured in `/etc/athena/athena.env` (for systemd
 - `MAX_CONCURRENT_DOWNLOADS` - Max parallel downloads (default: 2)
 - `MAX_CONCURRENT_ANALYZE` - Max parallel analyze calls, each spawns yt-dlp (default: 2)
 - `META_CACHE_TTL_HOURS` - TTL for cached yt-dlp metadata in hours; 0 disables the cache (default: 6)
+- `FILE_RETENTION_MINUTES` - How long a finished download stays available after the last session activity; new video or inactivity ends retention early (default: 10)
 - `MAX_FILE_AGE_HOURS` - Max age of temp files in hours before deletion (default: 1.0)
 - `CLEANUP_INTERVAL_SECONDS` - Cleanup check interval in seconds (default: 600)
 - `RUST_LOG` - Logging level (default: info)

@@ -7,7 +7,7 @@ use axum::{
     },
     response::{sse::Event, Html, IntoResponse, Json, Redirect, Response, Sse},
 };
-use futures::stream::{Stream, StreamExt};
+use futures::stream::Stream;
 use once_cell::sync::Lazy;
 use regex::Regex;
 use sha2::{Digest, Sha256};
@@ -26,8 +26,9 @@ use crate::models::{
     LoginRequest, LoginResponse, PlaylistVideo, ProgressUpdate, ShareRequest,
 };
 use crate::state::{
-    get_cached_meta, now_secs, store_cached_meta, ANALYZE_SEMAPHORE, AppState, DownloadInfo,
-    SharedState, PASSWORD_HASH, TOKEN_MAX_AGE_SECS, DOWNLOAD_DIR,
+    delete_download_artifacts, get_cached_meta, now_secs, store_cached_meta, touch_download,
+    ANALYZE_SEMAPHORE, AppState, DownloadInfo, SharedState, PASSWORD_HASH, TOKEN_MAX_AGE_SECS,
+    DOWNLOAD_DIR,
 };
 use crate::ytdlp::{
     download_task, get_audio_multiplier, map_audio_format_name, playlist_download_task,
@@ -860,6 +861,7 @@ pub async fn start_download(
                 timestamp: now_secs(),
                 speed: None,
                 eta: None,
+                last_activity: now_secs(),
             },
         );
     }
@@ -1004,11 +1006,13 @@ pub async fn progress_stream(
     headers: axum::http::HeaderMap,
     Path(download_id): Path<String>,
     Query(params): Query<HashMap<String, String>>,
-) -> Sse<impl Stream<Item = Result<Event, std::convert::Infallible>>> {
+) -> Response {
     let query_token = params.get("token").map(|s| s.as_str());
     let authenticated = is_authenticated(&headers, query_token, &state).await;
 
-    let stream = async_stream::stream! {
+    let stream: std::pin::Pin<
+        Box<dyn Stream<Item = Result<Event, std::convert::Infallible>> + Send>,
+    > = Box::pin(async_stream::stream! {
         if !authenticated {
             let error_json = serde_json::to_string(&ProgressUpdate {
                 status: "error".to_string(),
@@ -1073,9 +1077,16 @@ pub async fn progress_stream(
 
             sleep(Duration::from_millis(500)).await;
         }
-    };
+    });
 
-    Sse::new(stream)
+    let mut sse_response = Sse::new(stream).into_response();
+    let response_headers = sse_response.headers_mut();
+    // Reverse proxies (nginx & co.) buffer SSE by default, which delays every
+    // progress update until the stream ends — exactly the "stuck in queue"
+    // symptom. These headers disable that buffering end-to-end.
+    response_headers.insert("x-accel-buffering", "no".parse().unwrap());
+    response_headers.insert(CACHE_CONTROL, "no-cache".parse().unwrap());
+    sse_response
 }
 
 pub async fn download_file(
@@ -1126,24 +1137,16 @@ pub async fn download_file(
     let id_marker = format!("-[{}].", download_id);
     let clean_name = raw_name.replace(&id_marker, ".");
 
-    let file_size = fs::metadata(&file_path).await?.len();
+    // Serving the file is a sign of life for the owning session and keeps the
+    // retention timer running; the file stays available for repeat saves or
+    // other formats until it expires (see FILE_RETENTION_MINUTES).
+    touch_download(&state, &download_id).await;
 
-    let file_path_clone = file_path.clone();
-    let download_id_clone = download_id.clone();
+    let file_size = fs::metadata(&file_path).await?.len();
 
     let file = tokio::fs::File::open(&file_path).await?;
     let stream = tokio_util::io::ReaderStream::new(file);
-    let wrapped_stream = stream.then(move |chunk| {
-        let path = file_path_clone.clone();
-        let _id = download_id_clone.clone();
-        async move {
-            if chunk.is_err() {
-                let _ = fs::remove_file(&path).await;
-            }
-            chunk
-        }
-    });
-    let body = Body::from_stream(wrapped_stream);
+    let body = Body::from_stream(stream);
 
     let disposition = content_disposition_value(&clean_name);
 
@@ -1159,21 +1162,70 @@ pub async fn download_file(
     response_headers.insert("content-length", file_size.to_string().parse().unwrap());
     response_headers.insert("x-content-type-options", "nosniff".parse().unwrap());
 
-    tokio::spawn(async move {
-        sleep(Duration::from_secs(5)).await;
-        if let Err(e) = fs::remove_file(&file_path).await {
-            warn!("Failed to remove temp file {:?}: {}", file_path, e);
-        } else {
-            info!(
-                "Removed temp file for download {}: {:?}",
-                download_id, file_path
-            );
-        }
-        let mut downloads = state.active_downloads.lock().await;
-        downloads.remove(&download_id);
-    });
-
     Ok(response)
+}
+
+/// Session keep-alive: refreshes the retention timer of a download without
+/// transferring anything. Unknown ids answer with success=false so the client
+/// can silently drop stale state.
+pub async fn heartbeat_download(
+    State(state): State<SharedState>,
+    headers: axum::http::HeaderMap,
+    Path(download_id): Path<String>,
+) -> AppResult<Json<ApiResponse<serde_json::Value>>> {
+    if !is_authenticated(&headers, None, &state).await {
+        return Err(AppError::Unauthorized {
+            message: "Unauthorized".to_string(),
+        });
+    }
+
+    let alive = touch_download(&state, &download_id).await;
+    Ok(Json(ApiResponse {
+        success: true,
+        data: Some(serde_json::json!({ "alive": alive })),
+        error: None,
+    }))
+}
+
+/// Explicitly discard a finished download (new video = new session). Active
+/// downloads are refused; use /api/abort for those.
+pub async fn release_download(
+    State(state): State<SharedState>,
+    headers: axum::http::HeaderMap,
+    Path(download_id): Path<String>,
+) -> AppResult<Json<ApiResponse<serde_json::Value>>> {
+    if !is_authenticated(&headers, None, &state).await {
+        return Err(AppError::Unauthorized {
+            message: "Unauthorized".to_string(),
+        });
+    }
+
+    {
+        let downloads = state.active_downloads.lock().await;
+        match downloads.get(&download_id) {
+            Some(info) if info.status == "queued" || info.status == "processing" => {
+                return Ok(Json(ApiResponse {
+                    success: false,
+                    data: None,
+                    error: Some("Download läuft noch".to_string()),
+                }));
+            }
+            _ => {}
+        }
+    }
+
+    let removed = delete_download_artifacts(&state, &download_id).await;
+    info!(
+        "Released download {}: {}",
+        download_id,
+        if removed { "removed" } else { "not found" }
+    );
+
+    Ok(Json(ApiResponse {
+        success: true,
+        data: Some(serde_json::json!({ "released": removed })),
+        error: None,
+    }))
 }
 
 #[cfg(test)]

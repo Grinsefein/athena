@@ -310,6 +310,7 @@ async fn download_file_not_ready_is_404_for_queued_status() {
                 timestamp: now_secs(),
                 speed: None,
                 eta: None,
+                last_activity: now_secs(),
             },
         );
     }

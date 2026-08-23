@@ -70,6 +70,15 @@ pub static META_CACHE_TTL_HOURS: Lazy<f64> = Lazy::new(|| {
         .unwrap_or(6.0)
 });
 
+// How long a completed download is kept on disk after the last sign of life
+// (heartbeat, serve or progress event) from its session.
+pub static FILE_RETENTION_MINUTES: Lazy<f64> = Lazy::new(|| {
+    std::env::var("FILE_RETENTION_MINUTES")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(10.0)
+});
+
 pub const META_CACHE_MAX_ENTRIES: usize = 128;
 
 pub const TOKEN_MAX_AGE_SECS: f64 = 30.0 * 24.0 * 3600.0;
@@ -148,6 +157,7 @@ pub struct DownloadInfo {
     pub timestamp: f64,
     pub speed: Option<String>,
     pub eta: Option<String>,
+    pub last_activity: f64,
 }
 
 pub fn now_secs() -> f64 {
@@ -155,6 +165,39 @@ pub fn now_secs() -> f64 {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_secs_f64()
+}
+
+/// Remove a download entry together with its file on disk.
+/// Returns true when an entry existed and was removed.
+pub async fn delete_download_artifacts(state: &AppState, download_id: &str) -> bool {
+    let info = {
+        let mut downloads = state.active_downloads.lock().await;
+        downloads.remove(download_id)
+    };
+
+    match info {
+        Some(info) => {
+            if let Some(path) = info.file_path {
+                if let Err(e) = fs::remove_file(&path).await {
+                    warn!("Failed to remove file {:?} of {}: {}", path, download_id, e);
+                }
+            }
+            true
+        }
+        None => false,
+    }
+}
+
+/// Refresh the session liveness timestamp of a download, if it still exists.
+pub async fn touch_download(state: &AppState, download_id: &str) -> bool {
+    let mut downloads = state.active_downloads.lock().await;
+    match downloads.get_mut(download_id) {
+        Some(info) => {
+            info.last_activity = now_secs();
+            true
+        }
+        None => false,
+    }
 }
 
 pub async fn periodic_cleanup(state: SharedState) {
@@ -169,12 +212,39 @@ pub async fn periodic_cleanup(state: SharedState) {
 pub async fn cleanup_old_data(state: &AppState) {
     let current_time = now_secs();
 
-    // Cleanup old files
+    // Session-driven deletion: completed downloads whose session showed no
+    // sign of life (heartbeat/serve/progress) for longer than the retention
+    // window lose their file and entry.
+    let expired_ids: Vec<String> = {
+        let downloads = state.active_downloads.lock().await;
+        let ttl_secs = *FILE_RETENTION_MINUTES * 60.0;
+        downloads
+            .iter()
+            .filter(|(_, info)| {
+                info.status == "completed" && current_time - info.last_activity > ttl_secs
+            })
+            .map(|(id, _)| id.clone())
+            .collect()
+    };
+
+    for id in &expired_ids {
+        delete_download_artifacts(state, id).await;
+        info!("Retention expired, removed download {}", id);
+    }
+
+    // Snapshot file paths that still belong to live entries; the orphan sweep
+    // below must never touch them.
+    let referenced_paths: std::collections::HashSet<PathBuf> = {
+        let downloads = state.active_downloads.lock().await;
+        downloads.values().filter_map(|i| i.file_path.clone()).collect()
+    };
+
+    // Cleanup old orphaned files (no owning entry anymore)
     match fs::read_dir(&*DOWNLOAD_DIR).await {
         Ok(mut entries) => {
             while let Ok(Some(entry)) = entries.next_entry().await {
                 let path = entry.path();
-                if path.is_file() {
+                if path.is_file() && !referenced_paths.contains(&path) {
                     match entry.metadata().await {
                         Ok(metadata) => {
                             if let Ok(modified) = metadata.modified() {
@@ -203,15 +273,12 @@ pub async fn cleanup_old_data(state: &AppState) {
         Err(e) => warn!("Failed to read download directory: {}", e),
     }
 
-    // Cleanup old memory entries in single lock
+    // Cleanup stale memory entries in single lock
     {
         let mut downloads = state.active_downloads.lock().await;
         let stale_ids: Vec<String> = downloads
             .iter()
-            .filter(|(_, info)| {
-                let age_hours = (current_time - info.timestamp) / 3600.0;
-                age_hours > *MAX_FILE_AGE_HOURS
-            })
+            .filter(|(_, info)| (current_time - info.timestamp) / 3600.0 > *MAX_FILE_AGE_HOURS)
             .map(|(id, _)| id.clone())
             .collect();
 
@@ -297,6 +364,7 @@ mod tests {
                     timestamp: now_secs(),
                     speed: None,
                     eta: None,
+                    last_activity: now_secs(),
                 },
             );
         }
@@ -335,6 +403,7 @@ mod tests {
                     timestamp: now_secs(),
                     speed: None,
                     eta: None,
+                    last_activity: now_secs(),
                 },
             );
         }
@@ -461,6 +530,80 @@ mod auth_cleanup_tests {
         assert_eq!(TOKEN_MAX_AGE_SECS, 30.0 * 24.0 * 3600.0);
         assert_eq!(LOGIN_WINDOW_SECS, 900.0);
         assert_eq!(MAX_LOGIN_ATTEMPTS, 5);
+    }
+
+    #[tokio::test]
+    async fn test_retention_expires_idle_completed_downloads() {
+        let state = fresh_state();
+        let now = now_secs();
+        {
+            let mut downloads = state.active_downloads.lock().await;
+            downloads.insert(
+                "expired".to_string(),
+                DownloadInfo {
+                    status: "completed".to_string(),
+                    progress: 100.0,
+                    file_path: None,
+                    file_name: None,
+                    error: None,
+                    timestamp: now,
+                    speed: None,
+                    eta: None,
+                    last_activity: now - *FILE_RETENTION_MINUTES * 60.0 - 5.0,
+                },
+            );
+            downloads.insert(
+                "fresh".to_string(),
+                DownloadInfo {
+                    status: "completed".to_string(),
+                    progress: 100.0,
+                    file_path: None,
+                    file_name: None,
+                    error: None,
+                    timestamp: now,
+                    speed: None,
+                    eta: None,
+                    last_activity: now,
+                },
+            );
+        }
+
+        cleanup_old_data(&state).await;
+
+        let downloads = state.active_downloads.lock().await;
+        assert!(!downloads.contains_key("expired"), "idle completed download must expire");
+        assert!(downloads.contains_key("fresh"), "recently active download must survive");
+    }
+
+    #[tokio::test]
+    async fn test_retention_never_touches_running_downloads() {
+        let state = fresh_state();
+        let now = now_secs();
+        {
+            let mut downloads = state.active_downloads.lock().await;
+            downloads.insert(
+                "running".to_string(),
+                DownloadInfo {
+                    status: "processing".to_string(),
+                    progress: 40.0,
+                    file_path: None,
+                    file_name: None,
+                    error: None,
+                    timestamp: now,
+                    speed: None,
+                    eta: None,
+                    last_activity: now - *FILE_RETENTION_MINUTES * 60.0 - 60.0,
+                },
+            );
+        }
+
+        cleanup_old_data(&state).await;
+
+        let downloads = state.active_downloads.lock().await;
+        assert!(
+            downloads.contains_key("running"),
+            "active downloads must never be dropped by session retention"
+        );
     }
 }
 

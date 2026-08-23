@@ -9,7 +9,9 @@ use tokio::{
 };
 use tracing::{error, info, warn};
 
-use crate::state::{get_cached_meta, SharedState, DOWNLOAD_DIR, DOWNLOAD_SEMAPHORE};
+use crate::state::{
+    get_cached_meta, now_secs, store_cached_meta, SharedState, DOWNLOAD_DIR, DOWNLOAD_SEMAPHORE,
+};
 
 // Pre-compiled regex for progress parsing (captures percentage, speed, and ETA)
 pub static PROGRESS_REGEX: Lazy<Regex> = Lazy::new(|| {
@@ -214,8 +216,10 @@ pub async fn execute_download(
             return Err("Failed to analyze video".to_string());
         }
 
-        serde_json::from_slice(&info_output.stdout)
-            .map_err(|e| format!("Failed to parse video info: {}", e))?
+        let parsed: serde_json::Value = serde_json::from_slice(&info_output.stdout)
+            .map_err(|e| format!("Failed to parse video info: {}", e))?;
+        store_cached_meta(state, url.to_string(), parsed.clone()).await;
+        parsed
     };
 
     let filesize = video_info
@@ -250,6 +254,10 @@ pub async fn execute_download(
         "--newline",
         "--progress",
         "--embed-thumbnail",
+        "--embed-metadata",
+        "--embed-chapters",
+        "--convert-thumbnails",
+        "jpg",
         "--sponsorblock-remove",
         "sponsor",
     ];
@@ -266,20 +274,24 @@ pub async fn execute_download(
         }
     } else {
         if quality == "best" {
-            format_arg = "bestvideo+bestaudio/best".to_string();
+            format_arg = "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best".to_string();
         } else {
             let parts: Vec<&str> = quality.split('-').collect();
             if parts.len() == 2 {
                 let height_str: String = parts[0].chars().filter(|c| c.is_ascii_digit()).collect();
                 let ext = parts[1];
                 format_arg = format!(
-                    "bestvideo[height<={}][ext={}]+bestaudio/bestvideo[height<={}]+bestaudio/best",
-                    height_str, ext, height_str
+                    "bestvideo[height<={}][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<={}][ext={}]+bestaudio/bestvideo[height<={}]+bestaudio/best",
+                    height_str, height_str, ext, height_str
                 );
             } else {
-                format_arg = "bestvideo+bestaudio/best".to_string();
+                format_arg = "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best".to_string();
             }
         }
+        // Merged video+audio streams must land in an mp4 container; without
+        // this yt-dlp defaults to mkv.
+        args.push("--merge-output-format");
+        args.push("mp4");
     }
 
     args.push("-f");
@@ -341,6 +353,7 @@ pub async fn execute_download(
                             let mut downloads = state.active_downloads.lock().await;
                             if let Some(info) = downloads.get_mut(download_id) {
                                 info.progress = percent;
+                                info.last_activity = now_secs();
                                 info.speed = speed;
                                 info.eta = eta;
                             }
@@ -510,36 +523,45 @@ pub async fn execute_playlist_download(
             }
         }
 
-        let info_output = Command::new("yt-dlp")
-            .args([
-                "--quiet",
-                "--no-warnings",
-                "--dump-json",
-                "--no-download",
-                url,
-            ])
-            .kill_on_drop(true)
-            .output();
+        let video_info: serde_json::Value = if let Some(info) = get_cached_meta(state, url).await {
+            info!("Playlist {} using cached metadata for {}", download_id, url);
+            info
+        } else {
+            let info_output = Command::new("yt-dlp")
+                .args([
+                    "--quiet",
+                    "--no-warnings",
+                    "--dump-json",
+                    "--no-download",
+                    url,
+                ])
+                .kill_on_drop(true)
+                .output();
 
-        let info_output = match tokio::time::timeout(Duration::from_secs(60), info_output).await {
-            Ok(Ok(out)) => out,
-            Ok(Err(e)) => {
-                warn!("Failed to analyze playlist video at {}: {}", url, e);
+            let info_output = match tokio::time::timeout(Duration::from_secs(60), info_output).await
+            {
+                Ok(Ok(out)) => out,
+                Ok(Err(e)) => {
+                    warn!("Failed to analyze playlist video at {}: {}", url, e);
+                    continue;
+                }
+                Err(_) => {
+                    warn!("Timeout analyzing playlist video at {}", url);
+                    continue;
+                }
+            };
+
+            if !info_output.status.success() {
+                warn!("Failed to analyze playlist video at {}", url);
                 continue;
             }
-            Err(_) => {
-                warn!("Timeout analyzing playlist video at {}", url);
-                continue;
-            }
+
+            let parsed: serde_json::Value =
+                serde_json::from_slice(&info_output.stdout)
+                    .map_err(|e| format!("Failed to parse video info: {}", e))?;
+            store_cached_meta(state, url.to_string(), parsed.clone()).await;
+            parsed
         };
-
-        if !info_output.status.success() {
-            warn!("Failed to analyze playlist video at {}", url);
-            continue;
-        }
-
-        let video_info: serde_json::Value = serde_json::from_slice(&info_output.stdout)
-            .map_err(|e| format!("Failed to parse video info: {}", e))?;
 
         let title = video_info
             .get("title")
@@ -555,6 +577,10 @@ pub async fn execute_playlist_download(
             "--newline",
             "--progress",
             "--embed-thumbnail",
+            "--embed-metadata",
+            "--embed-chapters",
+            "--convert-thumbnails",
+            "jpg",
             "--sponsorblock-remove",
             "sponsor",
         ];
@@ -571,18 +597,20 @@ pub async fn execute_playlist_download(
             }
         } else {
             if quality == "best" {
-                format_arg = "bestvideo+bestaudio/best".to_string();
+                format_arg = "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best".to_string();
             } else {
                 let parts: Vec<&str> = quality.split('-').collect();
                 if parts.len() == 2 {
                     let height_str: String =
                         parts[0].chars().filter(|c| c.is_ascii_digit()).collect();
                     let ext = parts[1];
-                    format_arg = format!("bestvideo[height<={}][ext={}]+bestaudio/bestvideo[height<={}]+bestaudio/best", height_str, ext, height_str);
+                    format_arg = format!("bestvideo[height<={}][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<={}][ext={}]+bestaudio/bestvideo[height<={}]+bestaudio/best", height_str, height_str, ext, height_str);
                 } else {
-                    format_arg = "bestvideo+bestaudio/best".to_string();
+                    format_arg = "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best".to_string();
                 }
             }
+            args.push("--merge-output-format");
+            args.push("mp4");
         }
 
         args.push("-f");
@@ -647,6 +675,7 @@ pub async fn execute_playlist_download(
                                 let mut downloads = state.active_downloads.lock().await;
                                 if let Some(info) = downloads.get_mut(download_id) {
                                     info.progress = overall_pct;
+                                    info.last_activity = now_secs();
                                     info.speed = speed;
                                     info.eta = eta;
                                 }

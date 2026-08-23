@@ -11,7 +11,7 @@
   import {
     theme, urlInput, loading, videoInfo, errorMsg, isValidUrl, restoreSession
   } from './stores.js';
-  import { checkConfig, analyzeVideo, cancelAnalyze } from './api.js';
+  import { checkConfig, analyzeVideo, cancelAnalyze, initActivityTracking, ensureHeartbeat } from './api.js';
 
   let isInputFocused = false;
   // On small screens the input row is replaced by a read-only label once
@@ -24,6 +24,8 @@
 
   onMount(() => {
     theme.init();
+    initActivityTracking();
+    ensureHeartbeat();
 
     const mq = window.matchMedia('(max-width: 639px)');
     const applyViewport = () => (isMobileViewport = mq.matches);

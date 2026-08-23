@@ -36,15 +36,26 @@ async fn enrich_audio(
         }
     }
 
-    match metadata::fetch_album_art(&artist, &track).await {
+    let artwork = match metadata::fetch_album_art(&artist, &track).await {
+        Some(jpeg) => Some(jpeg),
+        None => {
+            let thumb = video_info
+                .get("thumbnail")
+                .and_then(|t| t.as_str())
+                .unwrap_or("");
+            metadata::fetch_image(thumb).await
+        }
+    };
+
+    match artwork {
         Some(jpeg) => match tags::embed_artwork(path, &jpeg) {
             Ok(()) => info!(
-                "Download {}: embedded real album art ({} - {})",
+                "Download {}: embedded album art ({} - {})",
                 download_id, artist, track
             ),
             Err(e) => warn!("Download {}: album art embed failed: {}", download_id, e),
         },
-        None => info!(
+        None => warn!(
             "Download {}: no album art found for '{} - {}'",
             download_id, artist, track
         ),
@@ -317,11 +328,8 @@ pub async fn execute_download(
         "--no-warnings",
         "--newline",
         "--progress",
-        "--embed-thumbnail",
         "--embed-metadata",
         "--embed-chapters",
-        "--convert-thumbnails",
-        "jpg",
         "--sponsorblock-remove",
         "sponsor",
     ];
@@ -337,6 +345,11 @@ pub async fn execute_download(
             format_arg = quality.to_string();
         }
     } else {
+        // yt-dlp's --embed-thumbnail needs python-mutagen for ogg/opus and is
+        // redundant for audio anyway: enrich_audio() embeds real album art.
+        args.push("--embed-thumbnail");
+        args.push("--convert-thumbnails");
+        args.push("jpg");
         if quality == "best" {
             format_arg = "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best".to_string();
         } else {
@@ -368,10 +381,18 @@ pub async fn execute_download(
 
     if extract_audio {
         args.push("--extract-audio");
-        args.push("--audio-format");
-        args.push("mp3");
-        args.push("--audio-quality");
-        args.push("0");
+        if quality == "best" {
+            // "Beste Qualität" delivers a universally playable MP3 (V0).
+            args.push("--audio-format");
+            args.push("mp3");
+            args.push("--audio-quality");
+            args.push("0");
+        } else {
+            // Explicit codec presets keep their native lossless-of-source
+            // container (opus/m4a/...), no re-encode.
+            args.push("--audio-format");
+            args.push("best");
+        }
     }
 
     args.push(url);
@@ -667,11 +688,8 @@ pub async fn execute_playlist_download(
             "--no-warnings",
             "--newline",
             "--progress",
-            "--embed-thumbnail",
             "--embed-metadata",
             "--embed-chapters",
-            "--convert-thumbnails",
-            "jpg",
             "--sponsorblock-remove",
             "sponsor",
         ];
@@ -687,6 +705,9 @@ pub async fn execute_playlist_download(
                 format_arg = quality.to_string();
             }
         } else {
+            args.push("--embed-thumbnail");
+            args.push("--convert-thumbnails");
+            args.push("jpg");
             if quality == "best" {
                 format_arg = "bestvideo[ext=mp4]+bestaudio[ext=m4a]/bestvideo+bestaudio/best".to_string();
             } else {
@@ -712,10 +733,15 @@ pub async fn execute_playlist_download(
 
         if extract_audio {
             args.push("--extract-audio");
-            args.push("--audio-format");
-            args.push("mp3");
-            args.push("--audio-quality");
-            args.push("0");
+            if quality == "best" {
+                args.push("--audio-format");
+                args.push("mp3");
+                args.push("--audio-quality");
+                args.push("0");
+            } else {
+                args.push("--audio-format");
+                args.push("best");
+            }
         }
 
         args.push(url);

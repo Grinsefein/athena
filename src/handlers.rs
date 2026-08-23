@@ -491,9 +491,9 @@ fn build_format_presets(info: &serde_json::Value) -> Vec<FormatInfo> {
 
     all_formats.push(FormatInfo {
         media_type: "audio".to_string(),
-        format: "best".to_string(),
+        format: "mp3".to_string(),
         quality: "best".to_string(),
-        label: "Beste Qualität (Audio)".to_string(),
+        label: "Beste Qualität (MP3)".to_string(),
         filesize: None,
     });
 
@@ -693,9 +693,9 @@ pub async fn analyze_video(
                 },
                 FormatInfo {
                     media_type: "audio".to_string(),
-                    format: "best".to_string(),
+                    format: "mp3".to_string(),
                     quality: "best".to_string(),
-                    label: "Beste Qualität (Audio)".to_string(),
+                    label: "Beste Qualität (MP3)".to_string(),
                     filesize: None,
                 },
             ],
@@ -1843,7 +1843,8 @@ mod format_preset_tests {
             .iter()
             .position(|f| f.media_type == "audio" && f.quality == "best")
             .expect("audio best entry must exist");
-        assert_eq!(presets[audio_best_idx].label, "Beste Qualität (Audio)");
+        assert_eq!(presets[audio_best_idx].label, "Beste Qualität (MP3)");
+        assert_eq!(presets[audio_best_idx].format, "mp3");
         // Audio best comes after all video presets.
         assert!(audio_best_idx > presets.iter().position(|f| f.media_type == "video" && f.quality != "best").unwrap());
     }

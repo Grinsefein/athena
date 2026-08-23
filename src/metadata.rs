@@ -170,6 +170,15 @@ async fn fetch_image_bytes(url: &str) -> Option<Vec<u8>> {
     Some(jpeg)
 }
 
+/// Download and JPEG-normalize an arbitrary image URL (used for the video
+/// thumbnail fallback when no real album art is available).
+pub async fn fetch_image(url: &str) -> Option<Vec<u8>> {
+    if url.is_empty() {
+        return None;
+    }
+    fetch_image_bytes(url).await
+}
+
 async fn query_lrclib(artist: &str, track: &str, album: &str, duration: Option<f64>) -> Option<Value> {
     if track.is_empty() {
         return None;

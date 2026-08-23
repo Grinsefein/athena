@@ -22,6 +22,7 @@ target/
 # Build artifacts
 dist/
 build/
+athena-sources.md
 
 # Editor/IDE files
 .vscode/

@@ -10,7 +10,8 @@
   import { smoothHeight } from './lib/actions.js';
 
   import {
-    theme, urlInput, loading, videoInfo, errorMsg, isValidUrl, restoreSession
+    theme, urlInput, loading, videoInfo, errorMsg, isValidUrl,
+    restoreSession, restoreCrossTabSession
   } from './stores.js';
   import { checkConfig, analyzeVideo, cancelAnalyze, initActivityTracking, ensureHeartbeat } from './api.js';
 
@@ -47,8 +48,9 @@
       return;
     }
 
-    // Re-bind to this tab's previous state (results + running download).
-    restoreSession();
+    // Re-bind to this tab's previous state (results + running download);
+    // if the tab is new, fall back to a download mirrored from a closed tab.
+    if (!restoreSession()) restoreCrossTabSession();
   });
 
   function handleInputKeydown(e) {

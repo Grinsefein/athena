@@ -4,8 +4,8 @@
 </script>
 
 <div class="topbar-left">
-  <a
-    href="/"
+  <button
+    type="button"
     class="icon-btn"
     on:click={resetApp}
     aria-label="Zur Startseite"
@@ -14,7 +14,7 @@
     <svg fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
       <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10.5L12 3l9 7.5M5 9.5V21h5v-6h4v6h5V9.5"/>
     </svg>
-  </a>
+  </button>
 </div>
 
 <div class="topbar">

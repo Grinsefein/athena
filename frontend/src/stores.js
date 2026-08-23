@@ -350,6 +350,18 @@ export function clearSession() {
   try { sessionStorage.removeItem(SESSION_KEY); } catch (_) {}
 }
 
+/// Binds the UI to a server-side download task and re-attaches the SSE
+/// stream. Shared by same-tab session restore and cross-tab recovery.
+function attachRunningDownload(id) {
+  downloadId.set(id);
+  speed.set(null);
+  eta.set(null);
+  downloading.set(true);
+  queued.set(true);
+  progress.set(0);
+  connectSSE(id, get(auth).token, { reattach: true });
+}
+
 /// Restores analysis results and any running download into the stores.
 /// Returns true when something was restored.
 export function restoreSession() {
@@ -381,10 +393,6 @@ export function restoreSession() {
   }
 
   if (snap.downloadId) {
-    downloadId.set(snap.downloadId);
-    speed.set(null);
-    eta.set(null);
-
     if (snap.completed && snap.downloadUrl) {
       completed.set(true);
       downloading.set(false);
@@ -393,13 +401,77 @@ export function restoreSession() {
     } else {
       // Re-bind to the still-running server-side download; the SSE stream
       // pushes the current status/progress within ~500ms of connecting.
-      downloading.set(true);
-      queued.set(true);
-      progress.set(0);
-      connectSSE(snap.downloadId, get(auth).token, { reattach: true });
+      attachRunningDownload(snap.downloadId);
     }
     restored = true;
   }
 
   return restored;
+}
+
+// ---------------------------------------------------------------------------
+// Cross-tab recovery: an active download is mirrored to localStorage so it
+// survives the tab being closed entirely (sessionStorage dies with the tab).
+// Reopening the app anywhere offers to re-bind to the still-running job.
+// The subscription keeps the snapshot in sync with every store transition
+// (start, terminal SSE events, abort, reset) without touching call sites.
+// ---------------------------------------------------------------------------
+const ACTIVE_KEY = 'athena_active_dl_v1';
+const ACTIVE_TTL_MS = 2 * 60 * 60 * 1000;
+
+function writeActiveMirror() {
+  try {
+    const id = get(downloadId);
+    if (!id || get(completed)) {
+      localStorage.removeItem(ACTIVE_KEY);
+      return;
+    }
+    localStorage.setItem(ACTIVE_KEY, JSON.stringify({
+      startedAt: Date.now(),
+      url: get(urlInput),
+      videoInfo: get(videoInfo),
+      selectedFormat: get(selectedFormat),
+      selectedQuality: get(selectedQuality),
+      selectedPlaylistUrls: get(selectedPlaylistUrls),
+      wantLyrics: get(wantLyrics),
+      downloadId: id,
+    }));
+  } catch (_) {}
+}
+
+downloadId.subscribe(writeActiveMirror);
+completed.subscribe(writeActiveMirror);
+
+/// Recovers a download that was started in another (closed) tab. Only used
+/// when same-tab session restore found nothing, so a plain reload never
+/// takes this path.
+export function restoreCrossTabSession() {
+  let snap;
+  try {
+    const raw = localStorage.getItem(ACTIVE_KEY);
+    snap = raw ? JSON.parse(raw) : null;
+  } catch (_) {
+    return false;
+  }
+  if (!snap || !snap.downloadId || !snap.videoInfo) return false;
+
+  if (!snap.startedAt || Date.now() - snap.startedAt > ACTIVE_TTL_MS) {
+    try { localStorage.removeItem(ACTIVE_KEY); } catch (_) {}
+    return false;
+  }
+
+  urlInput.set(snap.url || '');
+  videoInfo.set(snap.videoInfo);
+  lastAnalyzedUrl.set(snap.url || null);
+  selectedFormat.set(snap.selectedFormat || 'video');
+  formatSlide.set((snap.selectedFormat || 'video') === 'audio' ? 'left' : 'right');
+  selectedQuality.set(snap.selectedQuality || 'best');
+  selectedPlaylistUrls.set(
+    Array.isArray(snap.selectedPlaylistUrls) ? snap.selectedPlaylistUrls : []
+  );
+  wantLyrics.set(!!snap.wantLyrics);
+
+  attachRunningDownload(snap.downloadId);
+  toasts.add('Laufenden Download wiederhergestellt', 'info');
+  return true;
 }

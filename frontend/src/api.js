@@ -185,6 +185,36 @@ export function cancelAnalyze() {
   loading.set(false);
 }
 
+// ---------------------------------------------------------------------------
+// Race guards for the start/abort window: "downloading" is set synchronously
+// while the download id only arrives with the server response. A cancel click
+// (or a reset/logout) inside that window must not be swallowed silently.
+// appEpoch invalidates in-flight responses after resetApp()/logout().
+// ---------------------------------------------------------------------------
+let cancelRequested = false;
+let appEpoch = 0;
+
+function killDownload(id) {
+  if (!id) return Promise.resolve();
+  return fetch(`/api/abort/${encodeURIComponent(id)}`, {
+    method: 'POST',
+    headers: authHeaders()
+  }).catch(() => {});
+}
+
+function clearActiveDownload() {
+  closeSSE();
+  downloading.set(false);
+  queued.set(false);
+  speed.set(null);
+  eta.set(null);
+  clearLyrics();
+  downloadId.set(null);
+  aborting.set(false);
+  cancelRequested = false;
+  persistSession();
+}
+
 export async function startDownload() {
   const info = get(videoInfo);
   if (!info || get(downloading)) return;
@@ -201,6 +231,9 @@ export async function startDownload() {
   progress.set(0);
   speed.set(null);
   eta.set(null);
+
+  cancelRequested = false;
+  const epoch = appEpoch;
 
   const authState = get(auth);
   const currentUrl = cleanUrl(get(urlInput).trim());
@@ -235,6 +268,20 @@ export async function startDownload() {
     }
 
     const id = data.data.download_id;
+
+    // The job exists server-side now, but the world moved on while the
+    // request was in flight: either the user hit "Abbrechen" early or the
+    // app was reset/logged out. Stop the job instead of binding to it.
+    if (cancelRequested || epoch !== appEpoch) {
+      const wasCancel = cancelRequested && epoch === appEpoch;
+      clearActiveDownload();
+      killDownload(id);
+      if (wasCancel) {
+        toasts.add('Download abgebrochen', 'info');
+      }
+      return;
+    }
+
     downloadId.set(id);
     queued.set(data.data.status === 'queued');
     connectSSE(id, authState.token);
@@ -242,6 +289,8 @@ export async function startDownload() {
     persistSession();
   } catch (e) {
     downloading.set(false);
+    cancelRequested = false;
+    aborting.set(false);
     if (e.message !== 'Nicht angemeldet') {
       const msg = 'Download-Fehler: ' + e.message;
       errorMsg.set(msg);
@@ -251,9 +300,17 @@ export async function startDownload() {
 }
 
 export async function abortDownload() {
-  const id = get(downloadId);
-  if (!id || !get(downloading)) return;
+  if (!get(downloading)) return;
   aborting.set(true);
+
+  const id = get(downloadId);
+
+  // Start request still in flight: remember the intent; startDownload()
+  // resolves it as soon as the server hands back the download id.
+  if (!id) {
+    cancelRequested = true;
+    return;
+  }
 
   try {
     const authState = get(auth);
@@ -269,15 +326,7 @@ export async function abortDownload() {
   } catch (_) {
     // Network errors must not leave the UI stuck in "downloading"
   } finally {
-    aborting.set(false);
-    closeSSE();
-    downloading.set(false);
-    queued.set(false);
-    speed.set(null);
-    eta.set(null);
-    clearLyrics();
-    downloadId.set(null);
-    persistSession();
+    clearActiveDownload();
     toasts.add('Download abgebrochen', 'info');
   }
 }
@@ -308,11 +357,19 @@ export async function checkYtdlpUpdate() {
 }
 
 export function resetApp() {
+  appEpoch++;
+  cancelRequested = false;
   cancelAnalyze();
 
-  // "Neues Video" ends the session: release the finished file on the server.
-  if (get(downloadId) && get(completed)) {
-    releaseDownload(get(downloadId));
+  // "Neues Video" ends the session: release the finished file, and stop a
+  // still-running job outright so it never keeps running unobserved.
+  const id = get(downloadId);
+  if (id) {
+    if (get(completed)) {
+      releaseDownload(id);
+    } else {
+      killDownload(id);
+    }
   }
 
   clearSession();

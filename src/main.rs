@@ -30,12 +30,13 @@ const MAX_BODY_BYTES: usize = 256 * 1024;
 ///
 /// The frontend ships as a single inlined HTML file (vite-plugin-singlefile),
 /// so scripts and styles arrive as inline tags and need 'unsafe-inline'.
-/// Thumbnails are hot-linked from external CDNs (img-src https:), the favicon
-/// is a data: URI. Everything else is locked to the app origin.
+/// Thumbnails are hot-linked from external CDNs; some yt-dlp extractors only
+/// provide plain-http image URLs, hence http: stays allowed for images.
+/// The favicon is a data: URI. Everything else is locked to the app origin.
 const CONTENT_SECURITY_POLICY: &str = "default-src 'self'; \
     script-src 'self' 'unsafe-inline'; \
     style-src 'self' 'unsafe-inline'; \
-    img-src 'self' https: data:; \
+    img-src 'self' https: http: data:; \
     media-src 'self' https:; \
     connect-src 'self'; \
     font-src 'self'; \

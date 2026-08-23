@@ -1,7 +1,13 @@
 <script>
-  import { videoInfo, selectedFormat, formatSlide, selectedQuality, wantLyrics } from '../stores.js';
+  import { videoInfo, selectedFormat, formatSlide, selectedQuality, wantLyrics, downloading, queued } from '../stores.js';
+
+  // While a download is queued/running the selection is frozen server-side;
+  // changing it here would silently have no effect. Completed downloads stay
+  // editable on purpose (grab another format while the file is still cached).
+  $: busy = $downloading || $queued;
 
   function setFormat(type) {
+    if (busy) return;
     if ($selectedFormat !== type) {
       const order = ['video', 'audio'];
       formatSlide.set(order.indexOf(type) > order.indexOf($selectedFormat) ? 'right' : 'left');
@@ -29,14 +35,14 @@
   }
 </script>
 
-<div class="format-grid">
+<div class="format-grid" title={busy ? 'Während eines laufenden Downloads gesperrt' : undefined}>
   <!-- Format Toggle -->
   <div>
     <label class="label" for="formatSegment">Format</label>
     <div id="formatSegment" class="segmented" role="group" aria-label="Format wählen">
       <div class="segmented-indicator" style={`transform: translateX(${$selectedFormat === 'audio' ? '100%' : '0%'})`} aria-hidden="true"></div>
-      <button type="button" on:click={() => setFormat('video')} aria-pressed={$selectedFormat === 'video'}>Video</button>
-      <button type="button" on:click={() => setFormat('audio')} aria-pressed={$selectedFormat === 'audio'}>Audio</button>
+      <button type="button" on:click={() => setFormat('video')} disabled={busy} aria-pressed={$selectedFormat === 'video'}>Video</button>
+      <button type="button" on:click={() => setFormat('audio')} disabled={busy} aria-pressed={$selectedFormat === 'audio'}>Audio</button>
     </div>
   </div>
 
@@ -44,7 +50,7 @@
   <div>
     <label class="label" for="qualitySelect">Qualität</label>
     <div class="select-row sel-slide-{$formatSlide}">
-      <select id="qualitySelect" class="quality-select" bind:value={$selectedQuality} aria-label="Qualität wählen">
+      <select id="qualitySelect" class="quality-select" bind:value={$selectedQuality} disabled={busy} aria-label="Qualität wählen">
         {#each filteredFormats as fmt (fmt.quality)}
           <option value={fmt.quality}>{optionLabel(fmt)}</option>
         {/each}
@@ -61,8 +67,8 @@
 
 <!-- Lyrics option (audio only) -->
 {#if $selectedFormat === 'audio'}
-  <label class="check-row" title="Songtext über lrclib suchen, in die Datei einbetten und als .lrc/.txt anbieten">
-    <input type="checkbox" bind:checked={$wantLyrics}>
+  <label class="check-row" title={busy ? 'Während eines laufenden Downloads gesperrt' : 'Songtext über lrclib suchen, in die Datei einbetten und als .lrc/.txt anbieten'}>
+    <input type="checkbox" bind:checked={$wantLyrics} disabled={busy}>
     <span class="check-row-text">Songtext (Lyrics) mitladen</span>
   </label>
 {/if}

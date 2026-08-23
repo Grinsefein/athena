@@ -526,6 +526,10 @@ html.dark .segmented-indicator { background: var(--surface-3); }
 }
 .segmented button[aria-pressed="true"] { color: var(--brand-700); }
 html.dark .segmented button[aria-pressed="true"] { color: var(--brand-400); }
+.segmented button:disabled {
+    opacity: 0.45;
+    cursor: default;
+}
 
 /* ---------- Format grid ---------- */
 .format-grid {
@@ -601,6 +605,7 @@ html.dark .segmented button[aria-pressed="true"] { color: var(--brand-400); }
     transition: background-color 0.15s ease, border-color 0.15s ease;
 }
 @media (hover: hover) { .check-row:hover { background: var(--surface-3); } }
+.check-row:has(input:disabled) { opacity: 0.5; cursor: default; }
 .check-row input {
     width: 20px;
     height: 20px;

@@ -16,6 +16,10 @@ if [ ! -f target/release/athena ]; then
 fi
 
 # 2. Copy binary to /usr/local/bin
+# Stop a running instance first: overwriting a running executable fails
+# with "Text file busy" (ETXTBSY). The service is (re)started at the end.
+echo "Stopping athena service (if running)..."
+sudo systemctl stop athena 2>/dev/null || true
 echo "Installing binary to /usr/local/bin..."
 sudo cp target/release/athena /usr/local/bin/athena
 sudo chmod +x /usr/local/bin/athena
@@ -32,14 +36,24 @@ if ! getent passwd athena >/dev/null; then
 fi
 
 # 4. Set up configuration file
+# Never overwrite a live config: reinstalls must keep the production
+# password hash. An explicit repo .env still wins (with backup); otherwise
+# an existing athena.env is left untouched.
 echo "Setting up configuration in /etc/athena..."
 sudo mkdir -p /etc/athena
 if [ -f .env ]; then
+    if [ -f /etc/athena/athena.env ]; then
+        sudo cp /etc/athena/athena.env /etc/athena/athena.env.bak
+    fi
     sudo cp .env /etc/athena/athena.env
-elif [ -f .env.example ]; then
-    sudo cp .env.example /etc/athena/athena.env
+elif [ ! -f /etc/athena/athena.env ]; then
+    if [ -f .env.example ]; then
+        sudo cp .env.example /etc/athena/athena.env
+    else
+        sudo touch /etc/athena/athena.env
+    fi
 else
-    sudo touch /etc/athena/athena.env
+    echo "Keeping existing /etc/athena/athena.env (no .env in repo)."
 fi
 
 # Ensure DOWNLOAD_DIR is configured and exists with correct permissions

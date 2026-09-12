@@ -108,7 +108,7 @@ sudo make remove-service
 
 Environment variables can be configured in `/etc/athena/athena.env` (for systemd service) or `.env` in the project root:
 - `PORT` - Server port (default: 8000)
-- `DOWNLOAD_DIR` - Override temp directory (default: `/tmp/athena-downloads`)
+- `DOWNLOAD_DIR` - Override temp directory (default: system temp dir; the systemd service sets `/var/lib/athena/downloads`)
 - `MAX_CONCURRENT_DOWNLOADS` - Max parallel downloads (default: 2)
 - `MAX_CONCURRENT_ANALYZE` - Max parallel analyze calls, each spawns yt-dlp (default: 2)
 - `META_CACHE_TTL_HOURS` - TTL for cached yt-dlp metadata in hours; 0 disables the cache (default: 6)
@@ -121,7 +121,7 @@ Environment variables can be configured in `/etc/athena/athena.env` (for systemd
 ## Storage Behavior
 
 Files are stored temporarily:
-- Default location: System temp directory (`/tmp/athena-downloads` on Linux)
+- Default location: system temp directory (`/tmp/athena-downloads` on Linux; `/var/lib/athena/downloads` when running as systemd service)
 - Files deleted automatically after download completes
 - Cleanup runs every 10 minutes for orphaned files
 - Max file age: 1 hour

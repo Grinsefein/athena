@@ -56,9 +56,13 @@ else
     echo "Keeping existing /etc/athena/athena.env (no .env in repo)."
 fi
 
-# Ensure DOWNLOAD_DIR is configured and exists with correct permissions
-sudo mkdir -p /tmp/athena-downloads
-sudo chown -R athena:athena /tmp/athena-downloads
+# Service state (finished downloads) lives under /var/lib/athena: it is
+# persistent across reboots and, unlike a /tmp subdir, can be bind-mounted
+# read-write into the sandbox (PrivateTmp hides the host /tmp, so a
+# ReadWritePaths entry below /tmp fails namespace setup with 226/NAMESPACE
+# on systemd <254). The app picks it up via DOWNLOAD_DIR (see unit below).
+sudo mkdir -p /var/lib/athena/downloads
+sudo chown athena:athena /var/lib/athena/downloads 2>/dev/null || true
 
 # Also chown the configuration directory
 sudo chown -R athena:athena /etc/athena
@@ -99,18 +103,20 @@ User=athena
 Group=athena
 WorkingDirectory=/tmp
 EnvironmentFile=-/etc/athena/athena.env
+# Persistent download dir (see section 4); overrides the /tmp default so all
+# state lives on one writable, reboot-safe path.
+Environment=DOWNLOAD_DIR=/var/lib/athena/downloads
 ExecStart=/usr/local/bin/athena
 Restart=always
 RestartSec=5
 # Hardening: confine the server (and its yt-dlp/ffmpeg children) to exactly
-# what it needs. DOWNLOAD_DIR defaults to /tmp/athena-downloads (recreated
-# at startup, also works inside PrivateTmp); /var/lib/athena holds the
-# writable yt-dlp copy for self-update ('yt-dlp -U').
+# what it needs. /var/lib/athena holds downloads plus the writable yt-dlp
+# copy for self-update ('yt-dlp -U').
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
-ReadWritePaths=/var/lib/athena /tmp/athena-downloads
+ReadWritePaths=/var/lib/athena
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 
 [Install]

@@ -63,12 +63,9 @@
   function handlePaste(event) {
     const pastedText = (event.clipboardData || window.clipboardData).getData('text');
     if (pastedText && isValidUrl(pastedText.trim())) {
-      const trimmed = pastedText.trim();
-      urlInput.set(trimmed);
-      editingUrl = false;
-      // An explicitly pasted link is an unambiguous intent signal —
-      // start analyzing right away (same as the ?share=/?url= flow).
-      analyzeVideo(trimmed);
+      // Paste only fills the input — the user explicitly submits via
+      // Enter or the go button, which is what sends the URL to the backend.
+      urlInput.set(pastedText.trim());
     }
   }
 

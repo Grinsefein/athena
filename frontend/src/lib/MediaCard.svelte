@@ -1,5 +1,5 @@
 <script>
-  import { videoInfo, formatDuration } from '../stores.js';
+  import { videoInfo, formatDuration, auth } from '../stores.js';
 
   // Neutral placeholder shown while no thumbnail exists or the CDN URL
   // failed to load (expired/private videos), so the media row never shows
@@ -19,7 +19,29 @@
     return url.startsWith('//') ? `https:${url}` : url;
   }
 
-  $: thumbnail = normalizeThumbUrl($videoInfo?.thumbnail);
+  // Route allowlisted CDN hosts through the same-origin /api/thumb proxy so
+  // adblockers, DNS filters or flaky CDN reachability can't break artwork.
+  // Anything else (other extractors' hosts, data: URIs) loads directly.
+  function proxiedThumbUrl(url) {
+    if (!url) return null;
+    try {
+      const u = new URL(url);
+      const host = u.hostname.toLowerCase();
+      const cdn =
+        u.protocol === 'https:' &&
+        (host === 'ytimg.com' ||
+          host.endsWith('.ytimg.com') ||
+          host === 'ggpht.com' ||
+          host.endsWith('.ggpht.com'));
+      if (!cdn) return url;
+      const token = $auth.token;
+      return `/api/thumb?url=${encodeURIComponent(url)}${token ? `&token=${encodeURIComponent(token)}` : ''}`;
+    } catch (_) {
+      return url;
+    }
+  }
+
+  $: thumbnail = proxiedThumbUrl(normalizeThumbUrl($videoInfo?.thumbnail));
   $: hasRealThumb = !!thumbnail && !thumbFailed;
   $: thumbSrc = hasRealThumb ? thumbnail : THUMB_FALLBACK;
 </script>

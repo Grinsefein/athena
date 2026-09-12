@@ -183,6 +183,7 @@ async fn main() {
         )
         .route("/api/progress/:download_id", get(handlers::progress_stream))
         .route("/api/file/:download_id", get(handlers::download_file))
+        .route("/api/thumb", get(handlers::thumb_proxy))
         .route("/api/ytdlp-update", post(handlers::trigger_ytdlp_update))
         .layer(RequestBodyLimitLayer::new(MAX_BODY_BYTES))
         .layer(middleware::from_fn(security_headers))

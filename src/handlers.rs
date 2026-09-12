@@ -999,6 +999,111 @@ pub async fn analyze_video(
     }))
 }
 
+/// Thumbnail CDN hosts the /api/thumb proxy is willing to fetch from.
+/// Tight allowlist (plus https-only, no redirects, size cap) keeps the
+/// endpoint from becoming an open proxy / SSRF vector.
+fn is_allowed_thumb_host(host: &str) -> bool {
+    let h = host.to_ascii_lowercase();
+    h == "ytimg.com" || h.ends_with(".ytimg.com") || h == "ggpht.com" || h.ends_with(".ggpht.com")
+}
+
+/// Rejects everything but plain `https://<allowlisted-host>/<path>` thumbnail
+/// URLs: no credentials, no explicit port, no IP literal, no query tricks.
+fn validate_thumb_url(raw: &str) -> AppResult<url::Url> {
+    let invalid = || AppError::InvalidUrl {
+        message: "Thumbnail-URL wird nicht unterstützt".to_string(),
+    };
+    let url = url::Url::parse(raw).map_err(|_| invalid())?;
+    if url.scheme() != "https" || !url.username().is_empty() || url.port().is_some() {
+        return Err(invalid());
+    }
+    match url.host_str() {
+        Some(host) if is_allowed_thumb_host(host) => Ok(url),
+        _ => Err(invalid()),
+    }
+}
+
+static THUMB_CLIENT: Lazy<reqwest::Client> = Lazy::new(|| {
+    reqwest::Client::builder()
+        .user_agent(concat!("AthenaMedia/", env!("CARGO_PKG_VERSION")))
+        .timeout(std::time::Duration::from_secs(15))
+        // No redirects: an allowlisted host must answer directly, otherwise
+        // the allowlist check could be bypassed via a redirect target.
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .expect("failed to build thumbnail HTTP client")
+});
+
+/// Cap for proxied artwork (thumbnails are tens of KB; this is pure abuse backstop).
+const MAX_THUMB_BYTES: usize = 2 * 1024 * 1024;
+
+/// Proxies a video thumbnail through the backend so it loads same-origin:
+/// browser-side adblockers, DNS filters or flaky CDN reachability can no
+/// longer break artwork (cf. MediaCard, which routes allowlisted hosts here
+/// and keeps direct URLs for everything else).
+pub async fn thumb_proxy(
+    State(state): State<SharedState>,
+    Query(params): Query<HashMap<String, String>>,
+    headers: axum::http::HeaderMap,
+) -> AppResult<Response> {
+    let query_token = params.get("token").map(|s| s.as_str());
+    if !is_authenticated(&headers, query_token, &state).await {
+        return Err(AppError::Unauthorized {
+            message: "Unauthorized".to_string(),
+        });
+    }
+
+    let raw = params.get("url").map(|s| s.as_str()).unwrap_or("");
+    let url = validate_thumb_url(raw)?;
+
+    let resp = THUMB_CLIENT
+        .get(url)
+        .send()
+        .await
+        .map_err(|e| AppError::ExternalCommand {
+            message: format!("Thumbnail konnte nicht geladen werden: {}", e),
+        })?;
+    if !resp.status().is_success() {
+        return Err(AppError::ExternalCommand {
+            message: "Thumbnail ist nicht verfügbar".to_string(),
+        });
+    }
+    let content_type = resp
+        .headers()
+        .get(CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("image/jpeg")
+        .to_string();
+    if !content_type.starts_with("image/") {
+        return Err(AppError::ExternalCommand {
+            message: "Thumbnail ist kein Bild".to_string(),
+        });
+    }
+    if let Some(len) = resp.content_length() {
+        if len > MAX_THUMB_BYTES as u64 {
+            return Err(AppError::ExternalCommand {
+                message: "Thumbnail ist zu groß".to_string(),
+            });
+        }
+    }
+    let bytes = resp.bytes().await.map_err(|e| AppError::ExternalCommand {
+        message: format!("Thumbnail konnte nicht gelesen werden: {}", e),
+    })?;
+    if bytes.len() > MAX_THUMB_BYTES {
+        return Err(AppError::ExternalCommand {
+            message: "Thumbnail ist zu groß".to_string(),
+        });
+    }
+
+    Response::builder()
+        .header(CONTENT_TYPE, content_type)
+        .header(CACHE_CONTROL, "public, max-age=86400")
+        .body(Body::from(bytes))
+        .map_err(|e| AppError::Internal {
+            message: format!("Antwort konnte nicht gebaut werden: {}", e),
+        })
+}
+
 pub async fn trigger_ytdlp_update(
     State(state): State<SharedState>,
     headers: axum::http::HeaderMap,
@@ -1624,6 +1729,48 @@ pub async fn release_download(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ---------- thumbnail proxy allowlist ----------
+
+    #[test]
+    fn test_thumb_allows_youtube_cdns() {
+        assert!(validate_thumb_url("https://i.ytimg.com/vi/abc123/hqdefault.jpg").is_ok());
+        assert!(validate_thumb_url("https://i9.ytimg.com/vi/abc123/maxresdefault.jpg").is_ok());
+        assert!(validate_thumb_url("https://ytimg.com/x.jpg").is_ok());
+        assert!(validate_thumb_url("https://lh3.ggpht.com/abc=w120").is_ok());
+        // Host matching is case-insensitive
+        assert!(validate_thumb_url("https://I.YTIMG.COM/vi/abc/hqdefault.jpg").is_ok());
+    }
+
+    #[test]
+    fn test_thumb_rejects_non_allowlisted_hosts() {
+        for url in [
+            "https://evil-ytimg.com/x.jpg",
+            "https://ytimg.com.evil.com/x.jpg",
+            "https://example.com/x.jpg",
+            "https://192.0.2.1/x.jpg",
+            "https://[::1]/x.jpg",
+        ] {
+            assert!(validate_thumb_url(url).is_err(), "{url} must be rejected");
+        }
+    }
+
+    #[test]
+    fn test_thumb_rejects_tricky_urls() {
+        for url in [
+            "",
+            "not a url",
+            "/etc/passwd",
+            "http://i.ytimg.com/vi/abc/hqdefault.jpg", // https only
+            "https://user:pass@i.ytimg.com/x.jpg",     // no credentials
+            "https://i.ytimg.com:8443/x.jpg",          // no explicit port
+            "ftp://i.ytimg.com/x.jpg",
+            "javascript:alert(1)",
+            "data:image/png,abc",
+        ] {
+            assert!(validate_thumb_url(url).is_err(), "{url} must be rejected");
+        }
+    }
 
     // ---------- validate_url ----------
 

@@ -132,3 +132,4 @@ Files are stored temporarily:
 - `POST /api/download` - Start download
 - `GET /api/progress/:id` - SSE progress stream
 - `GET /api/file/:id` - Download file (auto-deleted after)
+- `GET /api/thumb?url=…` - Proxied video thumbnail (same-origin, allowlisted CDN hosts only)

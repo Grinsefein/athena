@@ -1,7 +1,7 @@
 # Athena Pi - Makefile for Host-Only (Native) Setup and Development
 # This Makefile manages dependencies, compilation, running, and systemd service installation.
 
-.PHONY: help build release run dev test clean watch lint fmt install-deps setup-service update-service remove-service quick-setup dev-server dev-frontend build-frontend check
+.PHONY: help build release run dev test clean watch lint fmt verify install-deps setup-service update-service remove-service quick-setup dev-server dev-frontend build-frontend check bump-version dump-sources
 
 help:
 	@echo ""
@@ -23,9 +23,14 @@ help:
 	@echo ""
 	@echo "$(GREEN)✓ Testing & Quality:$(NC)"
 	@echo "  make test             Run test suite"
-	@echo "  make lint             Run clippy linter"
+	@echo "  make lint             Run clippy linter (all targets)"
 	@echo "  make fmt              Format code with rustfmt"
 	@echo "  make check            Check without building"
+	@echo "  make verify           Full pipeline: fmt + lint + tests + frontend build"
+	@echo ""
+	@echo "$(GREEN)🔢 Maintenance:$(NC)"
+	@echo "  make bump-version V=x.y.z   Bump version in all 4 places (Cargo, npm ×2, sw.js)"
+	@echo "  make dump-sources     Bundle all sources into athena-sources.md"
 	@echo ""
 	@echo "$(GREEN)🚀 Installation & Deployment:$(NC)"
 	@echo "  make install-deps     Install system dependencies"
@@ -39,8 +44,7 @@ help:
 	@echo ""
 	@echo "$(GREEN)🧹 Maintenance:$(NC)"
 	@echo "  make clean            Remove build artifacts"
-	@echo "  make help             Show this message"
-	@echo ""
+	@echo "  make help             Show this message"	@echo ""
 	@echo "$(YELLOW)Examples:$(NC)"
 	@echo "  # First-time setup for development"
 	@echo "  make quick-setup"
@@ -109,12 +113,19 @@ fmt:
 	@echo "✓ Done"
 
 lint:
-	@echo "Running clippy linter..."
-	@cargo clippy -- -D warnings
+	@echo "Running clippy linter (all targets)..."
+	@cargo clippy --all-targets -- -D warnings
 
 check:
 	@echo "Checking code (no build)..."
 	@cargo check
+
+# Full verification pipeline as documented in AGENTS.md
+verify: fmt
+	@cargo clippy --all-targets -- -D warnings
+	@cargo test
+	@$(MAKE) build-frontend
+	@echo "✓ Verify pipeline complete"
 
 # Setup and deployment targets
 install-deps:
@@ -176,6 +187,18 @@ cross-build-armv7:
 	@echo "     ssh pi@raspberrypi 'cd athena && sudo make setup-service'"
 
 # Maintenance targets
+bump-version:
+ifndef V
+	@echo "Usage: make bump-version V=x.y.z" >&2
+	@exit 1
+endif
+	@chmod +x scripts/bump-version.sh
+	@./scripts/bump-version.sh "$(V)"
+
+dump-sources:
+	@chmod +x scripts/dump-source.sh
+	@./scripts/dump-source.sh
+
 clean:
 	@echo "Cleaning build artifacts..."
 	@cargo clean

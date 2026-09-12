@@ -63,7 +63,12 @@
   function handlePaste(event) {
     const pastedText = (event.clipboardData || window.clipboardData).getData('text');
     if (pastedText && isValidUrl(pastedText.trim())) {
-      urlInput.set(pastedText.trim());
+      const trimmed = pastedText.trim();
+      urlInput.set(trimmed);
+      editingUrl = false;
+      // An explicitly pasted link is an unambiguous intent signal —
+      // start analyzing right away (same as the ?share=/?url= flow).
+      analyzeVideo(trimmed);
     }
   }
 

@@ -90,6 +90,29 @@ pub static PROGRESS_REGEX: Lazy<Regex> = Lazy::new(|| {
     Regex::new(r"\[download\]\s+(\d+\.?\d*)%(?:\s+of\s+(?:~)?(\d+\.?\d*)(KiB|MiB|GiB|unknown))?(?:\s+at\s+(\d+\.?\d*)(KiB|MiB|GiB)/s)?(?:\s+ETA\s+(\d+:?\d*))?").unwrap()
 });
 
+/// Maps yt-dlp's per-stream percentages to an overall 0..=100 progress.
+///
+/// yt-dlp prints 0→100% *per stream*: for `bestvideo+bestaudio` the video
+/// stream runs to 100% and the audio stream then starts again at 0%.
+/// Assigning that value 1:1 makes the bar visibly jump backwards, which
+/// users read as an error. Weighting the phases (like the playlist progress
+/// already does per video) keeps the bar monotonic-friendly.
+pub fn overall_for_streams(stream_index: u32, percent: f64, total_streams: u32) -> f64 {
+    let total = total_streams.max(1) as f64;
+    let clamped = percent.clamp(0.0, 100.0);
+    let capped_index = stream_index.min(total_streams.saturating_sub(1));
+    (capped_index as f64 * 100.0 + clamped) / total
+}
+
+/// Detects a phase change (video → audio stream) via a sharp percentage drop.
+///
+/// A `[download] Destination:` line would be the explicit signal, but it is
+/// suppressed under yt-dlp's `--quiet` flag, so a drop of more than 15 points
+/// is the robust indicator. Small jitter must NOT count as a new phase.
+pub fn is_stream_phase_jump(previous_percent: f64, current_percent: f64) -> bool {
+    current_percent + 15.0 < previous_percent
+}
+
 pub const SECONDS_PER_DAY: u64 = 24 * 60 * 60;
 
 pub fn get_audio_multiplier(acodec: &str, ext: &str) -> f64 {
@@ -430,6 +453,12 @@ pub async fn execute_download(
     let mut reader = BufReader::new(stdout);
     let mut line = String::new();
 
+    // Video downloads fetch two streams (video, then audio) that each run
+    // 0→100%; audio-only downloads have a single phase.
+    let total_streams: u32 = if format_type == "audio" { 1 } else { 2 };
+    let mut stream_index: u32 = 0;
+    let mut stream_percent: f64 = 0.0;
+
     loop {
         line.clear();
         match reader.read_line(&mut line).await {
@@ -438,6 +467,13 @@ pub async fn execute_download(
                 if let Some(cap) = PROGRESS_REGEX.captures(&line) {
                     if let Some(percent_match) = cap.get(1) {
                         if let Ok(percent) = percent_match.as_str().parse::<f64>() {
+                            if stream_index + 1 < total_streams
+                                && is_stream_phase_jump(stream_percent, percent)
+                            {
+                                stream_index += 1;
+                            }
+                            stream_percent = percent;
+                            let overall = overall_for_streams(stream_index, percent, total_streams);
                             let speed = if let (Some(speed_val), Some(speed_unit)) =
                                 (cap.get(4), cap.get(5))
                             {
@@ -450,7 +486,9 @@ pub async fn execute_download(
 
                             let mut downloads = state.active_downloads.lock().await;
                             if let Some(info) = downloads.get_mut(download_id) {
-                                info.progress = percent;
+                                // Never move the bar backwards — a stall reads
+                                // as "slow", a jump back reads as "broken".
+                                info.progress = overall.max(info.progress);
                                 info.last_activity = now_secs();
                                 info.speed = speed;
                                 info.eta = eta;
@@ -776,6 +814,13 @@ pub async fn execute_playlist_download(
         let mut reader = BufReader::new(stdout);
         let mut line = String::new();
 
+        // Same two-stream problem as single downloads, nested inside the
+        // per-video weighting: each video contributes 0→100 mapped onto its
+        // 1/total_videos slice of the bar.
+        let total_streams: u32 = if format_type == "audio" { 1 } else { 2 };
+        let mut stream_index: u32 = 0;
+        let mut stream_percent: f64 = 0.0;
+
         loop {
             line.clear();
             match reader.read_line(&mut line).await {
@@ -784,8 +829,16 @@ pub async fn execute_playlist_download(
                     if let Some(cap) = PROGRESS_REGEX.captures(&line) {
                         if let Some(percent_match) = cap.get(1) {
                             if let Ok(percent) = percent_match.as_str().parse::<f64>() {
+                                if stream_index + 1 < total_streams
+                                    && is_stream_phase_jump(stream_percent, percent)
+                                {
+                                    stream_index += 1;
+                                }
+                                stream_percent = percent;
+                                let video_pct =
+                                    overall_for_streams(stream_index, percent, total_streams);
                                 let overall_pct =
-                                    ((index as f64) * 100.0 + percent) / (total_videos as f64);
+                                    ((index as f64) * 100.0 + video_pct) / (total_videos as f64);
 
                                 let speed = if let (Some(speed_val), Some(speed_unit)) =
                                     (cap.get(4), cap.get(5))
@@ -805,7 +858,7 @@ pub async fn execute_playlist_download(
 
                                 let mut downloads = state.active_downloads.lock().await;
                                 if let Some(info) = downloads.get_mut(download_id) {
-                                    info.progress = overall_pct;
+                                    info.progress = overall_pct.max(info.progress);
                                     info.last_activity = now_secs();
                                     info.speed = speed;
                                     info.eta = eta;
@@ -1108,5 +1161,51 @@ mod tests {
         let timestamp = 1234567890u64;
         let unique_name = format!("{}_{}.{}", safe_title, timestamp, ext);
         assert_eq!(unique_name, "my_video_1234567890.mp4");
+    }
+
+    #[test]
+    fn test_overall_for_streams_two_phases() {
+        // Video phase fills the first half, audio phase the second half.
+        assert!((overall_for_streams(0, 0.0, 2) - 0.0).abs() < f64::EPSILON);
+        assert!((overall_for_streams(0, 100.0, 2) - 50.0).abs() < f64::EPSILON);
+        assert!((overall_for_streams(1, 0.0, 2) - 50.0).abs() < f64::EPSILON);
+        assert!((overall_for_streams(1, 100.0, 2) - 100.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_overall_for_streams_single_phase() {
+        assert!((overall_for_streams(0, 42.5, 1) - 42.5).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_is_stream_phase_jump() {
+        // Sharp drop after a completed video stream = new phase.
+        assert!(is_stream_phase_jump(100.0, 0.5));
+        assert!(is_stream_phase_jump(87.3, 12.1));
+        // Small jitter / normal forward progress = same phase.
+        assert!(!is_stream_phase_jump(45.2, 45.5));
+        assert!(!is_stream_phase_jump(45.2, 44.9));
+        assert!(!is_stream_phase_jump(10.0, 25.0));
+    }
+
+    #[test]
+    fn test_two_stream_sequence_is_monotonic() {
+        // Simulates yt-dlp output: video 0→100, then audio 0→100.
+        let seq = [10.0, 55.0, 100.0, 2.0, 60.0, 100.0];
+        let mut stream_index = 0u32;
+        let mut prev = 0.0f64;
+        let mut shown = 0.0f64;
+        for pct in seq {
+            if stream_index + 1 < 2 && is_stream_phase_jump(prev, pct) {
+                stream_index += 1;
+            }
+            prev = pct;
+            let overall = overall_for_streams(stream_index, pct, 2);
+            shown = overall.max(shown);
+        }
+        assert!((shown - 100.0).abs() < f64::EPSILON);
+        // The critical assertion: the 100% → 2% stream switch maps to 50%,
+        // never backwards from the previous 50%.
+        assert!((overall_for_streams(1, 2.0, 2) - 51.0).abs() < f64::EPSILON);
     }
 }

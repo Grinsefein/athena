@@ -12,7 +12,8 @@ if [ "$(id -u)" = "0" ]; then
 fi
 
 # 2. Build the release binary
-echo "Building frontend and optimized release binary..."
+VERSION=$(grep -m1 '^version' Cargo.toml | cut -d '"' -f2)
+echo "Building frontend and optimized release binary (v${VERSION})..."
 (cd frontend && npm install && npm run build)
 cargo build --release
 

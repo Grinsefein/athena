@@ -3,9 +3,13 @@
 echo "=== Starting Athena Pi Development Server ==="
 
 # Load environment variables from .env if present
+# (set -a auto-exports everything; sourcing handles quoted values with
+# spaces/special chars, unlike the previous grep|xargs approach)
 if [ -f .env ]; then
     echo "Loading environment variables from .env..."
-    export $(grep -v '^#' .env | xargs)
+    set -a
+    . ./.env
+    set +a
 fi
 
 # Set default env vars if not set

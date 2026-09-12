@@ -88,6 +88,16 @@ EnvironmentFile=-/etc/athena/athena.env
 ExecStart=/usr/local/bin/athena
 Restart=always
 RestartSec=5
+# Hardening: confine the server (and its yt-dlp/ffmpeg children) to exactly
+# what it needs. DOWNLOAD_DIR defaults to /tmp/athena-downloads (recreated
+# at startup, also works inside PrivateTmp); /var/lib/athena holds the
+# writable yt-dlp copy for self-update ('yt-dlp -U').
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/lib/athena /tmp/athena-downloads
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 
 [Install]
 WantedBy=multi-user.target

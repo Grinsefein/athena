@@ -166,7 +166,7 @@ export async function analyzeVideo(url) {
   } catch (e) {
     if (e.name === 'AbortError') return;
     if (analyzeController && analyzeController.signal === signal && e.message !== 'Nicht angemeldet') {
-      const msg = 'Video konnte nicht analysiert werden. Bitte Link prüfen.';
+      const msg = e.message || 'Video konnte nicht analysiert werden. Bitte Link prüfen.';
       errorMsg.set(msg);
       toasts.add(msg, 'error');
     }

@@ -1,5 +1,5 @@
 <script>
-  import { downloading, queued, progress, completed, speed, eta, downloadUrl, loading, auth, aborting } from '../stores.js';
+  import { downloading, queued, progress, completed, speed, eta, downloadUrl, downloadId, loading, auth, aborting } from '../stores.js';
   import { startDownload, abortDownload, resetApp } from '../api.js';
   import LyricsPanel from './LyricsPanel.svelte';
 
@@ -8,6 +8,39 @@
     : '#';
 
   $: preparing = $downloading && !$queued && $progress <= 0;
+
+  // Auto-save once the download completes in THIS session (live transition
+  // downloading -> completed). Restored sessions (reload re-binds completed=true
+  // without ever seeing downloading=true) must NOT re-trigger a download.
+  let sawLiveDownload = false;
+  let autoSavedForId = null;
+
+  $: if ($downloading) sawLiveDownload = true;
+  $: if (!$downloading && !$completed) {
+    sawLiveDownload = false;
+    autoSavedForId = null;
+  }
+  $: if ($completed && fullDownloadUrl && fullDownloadUrl !== '#' && sawLiveDownload && autoSavedForId !== $downloadId) {
+    autoSavedForId = $downloadId;
+    triggerAutoSave(fullDownloadUrl);
+  }
+
+  function triggerAutoSave(url) {
+    try {
+      const a = document.createElement('a');
+      a.href = url;
+      // Empty value lets the server's Content-Disposition filename win.
+      a.download = '';
+      // Must be in the DOM for the click to count in all browsers.
+      a.style.display = 'none';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    } catch (_) {
+      // Programmatic clicks can be blocked (mobile browsers, download
+      // managers) — the visible "Datei speichern" button stays as fallback.
+    }
+  }
 </script>
 
 <div class="dl-flow">
